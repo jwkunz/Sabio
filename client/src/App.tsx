@@ -14,6 +14,7 @@ import {
   extractFilesFromMarkdown,
   inferCodeBlockFilename
 } from "./lib/fileBundle";
+import { normalizeMathDelimiters } from "./lib/markdown";
 import type { Message, ModelOption, PaneWidths, SessionState, UploadedFile } from "./types/app";
 
 const createMessage = (role: Message["role"], content: string): Message => ({
@@ -650,7 +651,7 @@ function App() {
                         }
                       }}
                     >
-                      {message.content}
+                      {normalizeMathDelimiters(message.content)}
                     </ReactMarkdown>
                   );
                 })()
@@ -670,7 +671,7 @@ function App() {
                 rehypePlugins={[rehypeKatex]}
                 remarkPlugins={[remarkGfm, remarkMath]}
               >
-                {streamingContent}
+                {normalizeMathDelimiters(streamingContent)}
               </ReactMarkdown>
             </article>
           ) : null}
