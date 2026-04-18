@@ -5,6 +5,7 @@ import rehypeHighlight from "rehype-highlight";
 import { buildPrompt, DEFAULT_SYSTEM_PROMPT, trimHistoryForContext } from "../../shared/prompt";
 import logoUrl from "../../assets/Sabio_logo.png";
 import { clearMessages, loadFiles, loadMessages, loadSession, saveFiles, saveMessages, saveSession } from "./lib/db";
+import { downloadFileBundle, extractFilesFromMarkdown } from "./lib/fileBundle";
 import type { Message, ModelOption, PaneWidths, SessionState, UploadedFile } from "./types/app";
 
 const createMessage = (role: Message["role"], content: string): Message => ({
@@ -21,6 +22,16 @@ const defaultPaneWidths: PaneWidths = {
 };
 
 const copyText = async (value: string) => navigator.clipboard.writeText(value);
+
+const downloadMarkdown = (content: string, createdAt: number) => {
+  const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `sabio-response-${createdAt}.md`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+};
 
 function App() {
   const [isHydrated, setIsHydrated] = useState(false);
@@ -40,6 +51,7 @@ function App() {
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [lastRequest, setLastRequest] = useState<{ input: string; baseMessages: Message[] } | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [activePanel, setActivePanel] = useState<"help" | "legal" | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ startX: number; widths: PaneWidths; handle: "left" | "right" } | null>(null);
@@ -410,6 +422,9 @@ function App() {
     document.body.classList.add("is-resizing");
   };
 
+  const panelTitle =
+    activePanel === "help" ? "Help" : activePanel === "legal" ? "Legal" : "";
+
   return (
     <div className="app-shell">
       <aside className="pane pane-left" style={{ width: `${session.paneWidths.left}%` }}>
@@ -444,6 +459,14 @@ function App() {
               </div>
             </label>
           ))}
+        </div>
+        <div className="pane-footer">
+          <button type="button" className="secondary-button" onClick={() => setActivePanel("help")}>
+            Help
+          </button>
+          <button type="button" className="secondary-button" onClick={() => setActivePanel("legal")}>
+            Legal
+          </button>
         </div>
       </aside>
 
@@ -483,20 +506,26 @@ function App() {
                   </button>
                 ) : (
                   <div className="message-actions">
+                    {(() => {
+                      const extractedFiles = extractFilesFromMarkdown(message.content);
+
+                      return extractedFiles.length >= 2 ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void downloadFileBundle(extractedFiles, `sabio-files-${message.createdAt}.zip`)
+                          }
+                        >
+                          Download .zip
+                        </button>
+                      ) : null;
+                    })()}
                     <button type="button" onClick={() => copyText(message.content)}>
                       Copy
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        const blob = new Blob([message.content], { type: "text/markdown;charset=utf-8" });
-                        const url = URL.createObjectURL(blob);
-                        const anchor = document.createElement("a");
-                        anchor.href = url;
-                        anchor.download = `sabio-response-${message.createdAt}.md`;
-                        anchor.click();
-                        URL.revokeObjectURL(url);
-                      }}
+                      onClick={() => downloadMarkdown(message.content, message.createdAt)}
                     >
                       Download .md
                     </button>
@@ -650,6 +679,93 @@ function App() {
           </button>
         </div>
       </aside>
+
+      {activePanel ? (
+        <div className="overlay" onClick={() => setActivePanel(null)}>
+          <section className="dialog" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-header">
+              <h2>{panelTitle}</h2>
+              <button type="button" className="secondary-button" onClick={() => setActivePanel(null)}>
+                Close
+              </button>
+            </div>
+
+            {activePanel === "help" ? (
+              <div className="dialog-body">
+                <p>
+                  Sabio is a local-first workspace for working with a locally running Ollama model through a dedicated
+                  chat interface. The layout is split into three panes so you can manage files on the left, conduct the
+                  conversation in the center, and adjust settings on the right without leaving the main screen.
+                </p>
+                <p>
+                  Begin by selecting a model in the settings pane. Sabio reads the model list from your local Ollama
+                  instance and remembers the selected model between sessions. You can also edit the system prompt in
+                  the settings pane to change response style, formatting rules, or task constraints, then restore the
+                  default behavior at any time with <strong>Reset default prompt</strong>.
+                </p>
+                <p>
+                  To provide source material, use <strong>Upload</strong> in the file pane. Sabio extracts raw text
+                  from supported documents including plain text, Markdown, JSON, CSV, source code, PDF, and DOCX
+                  files. Uploaded files are stored locally in your browser and remain available after a reload. Use the
+                  checkbox beside each file to control whether it is included in the next prompt. Only the files
+                  currently selected are sent as context.
+                </p>
+                <p>
+                  The center pane is the primary workspace. Type a multi-line prompt in the composer and press
+                  <strong> Ctrl+Shift+Enter</strong> or click <strong>Send</strong>. Sabio keeps conversation history
+                  locally and assembles each request from the system prompt, prior conversation, selected files, and
+                  your current input. As the model responds, the assistant output streams into a temporary bubble. When
+                  generation finishes successfully, the response is committed to history.
+                </p>
+                <p>
+                  If a response is not going in the right direction, use <strong>Cancel</strong> during generation.
+                  This stops the active request and avoids saving a completed assistant message for that interrupted
+                  turn. If a request fails, Sabio shows an error banner with a <strong>Retry</strong> option. If you
+                  need to revise an earlier user prompt, use <strong>Edit &amp; rerun</strong> on that message. Sabio
+                  will truncate the later conversation, replace the edited message, and regenerate from that point.
+                </p>
+                <p>
+                  Assistant responses are rendered as Markdown. Each assistant message includes a <strong>Copy</strong>
+                  action that copies the raw Markdown and a <strong>Download .md</strong> action that exports the
+                  response as a Markdown file. Fenced code blocks also include a dedicated <strong>Copy code</strong>
+                  button for snippet-level reuse.
+                </p>
+                <p>
+                  Sabio persists your session locally, including message history, uploaded files, file selections,
+                  draft input, pane widths, selected model, and system prompt. Use <strong>Clear context</strong> to
+                  reset the conversation when you want a fresh chat while keeping the rest of your local workspace
+                  intact.
+                </p>
+              </div>
+            ) : (
+              <div className="dialog-body">
+                <p><strong>Copyright 2026 Numerius Engineering LLC</strong></p>
+                <p>
+                  Sabio is a local-first application. Sabio does not collect telemetry, analytics, usage metrics,
+                  prompt histories, uploaded document contents, model responses, or any other application data for
+                  centralized monitoring or vendor-side retention.
+                </p>
+                <p>
+                  Sabio does not send your prompts, files, or chat history to a Sabio-operated cloud service. Local
+                  application state is stored in your browser so the interface can restore your session, files, pane
+                  sizes, and settings after a reload.
+                </p>
+                <p>
+                  All prompt data is handled by the large language model endpoint that you configure for Sabio. In the
+                  default configuration, that endpoint is your local Ollama instance. When you submit a prompt, Sabio
+                  forwards the assembled request to that endpoint so the model can generate a response.
+                </p>
+                <p>
+                  Sabio itself does not maintain centralized logs of prompt data or completions. Any data handling,
+                  logging, retention, transport, or privacy characteristics beyond the Sabio application are governed
+                  by the large language model endpoint and infrastructure you choose to use. You are responsible for
+                  evaluating that endpoint’s privacy and security posture.
+                </p>
+              </div>
+            )}
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
