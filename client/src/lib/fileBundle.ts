@@ -6,8 +6,17 @@ export interface ExtractedFile {
   content: string;
 }
 
+export interface ExtractedCodeBlock {
+  filename: string;
+  language: string;
+  content: string;
+}
+
 const FILE_BLOCK_PATTERN =
   /--- FILE:\s*([^\n]+?)\s*---\s*```([^\n`]*)\n([\s\S]*?)```[\t ]*\n--- END FILE ---/g;
+const CODE_BLOCK_PATTERN = /```([^\n`]*)\n([\s\S]*?)```/g;
+const FILE_NAME_HINT_PATTERN =
+  /(?:^|\n)\s*(?:#{1,6}\s*)?(?:[-*]\s*)?(?:\*\*)?(?:file(?:name)?\s*:\s*)?`?([A-Za-z0-9._/@-]+\/[A-Za-z0-9._@-]+|[A-Za-z0-9._@-]+\.[A-Za-z0-9._@-]+)`?(?:\*\*)?\s*$/i;
 
 const sanitizePath = (rawPath: string) => {
   const normalized = rawPath
@@ -22,6 +31,27 @@ const sanitizePath = (rawPath: string) => {
     .filter((part) => part !== "." && part !== "..");
 
   return safeParts.join("/");
+};
+
+const baseName = (path: string) => path.split("/").pop() || path;
+
+const parseFenceInfo = (info: string) => {
+  const parts = info.trim().split(/\s+/).filter(Boolean);
+  const language = parts[0] ?? "";
+  const filenameMatch = info.match(/(?:file(?:name)?=|path=)(?:"([^"]+)"|'([^']+)'|([^\s]+))/i);
+  const positionalPath = parts.find((part, index) => index > 0 && sanitizePath(part).includes("."));
+  const filename = sanitizePath(filenameMatch?.[1] ?? filenameMatch?.[2] ?? filenameMatch?.[3] ?? positionalPath ?? "");
+
+  return {
+    language,
+    filename
+  };
+};
+
+const findFilenameHintBefore = (markdown: string, codeBlockStart: number) => {
+  const before = markdown.slice(0, codeBlockStart).split("\n").slice(-4).join("\n");
+  const match = before.match(FILE_NAME_HINT_PATTERN);
+  return sanitizePath(match?.[1] ?? "");
 };
 
 export const extractFilesFromMarkdown = (markdown: string): ExtractedFile[] => {
@@ -59,6 +89,31 @@ export const extractFilesFromMarkdown = (markdown: string): ExtractedFile[] => {
   }
 
   return extracted;
+};
+
+export const extractCodeBlocksFromMarkdown = (markdown: string): ExtractedCodeBlock[] => {
+  const codeBlocks: ExtractedCodeBlock[] = [];
+  const fileBlocks = extractFilesFromMarkdown(markdown);
+  let fileBlockIndex = 0;
+
+  for (const match of markdown.matchAll(CODE_BLOCK_PATTERN)) {
+    const info = match[1] ?? "";
+    const content = (match[2] ?? "").replace(/\n$/, "");
+    const codeBlockStart = match.index ?? 0;
+    const fence = parseFenceInfo(info);
+    const hintedFilename = findFilenameHintBefore(markdown, codeBlockStart);
+    const matchingFileBlock =
+      fileBlocks[fileBlockIndex]?.content.trim() === content.trim() ? fileBlocks[fileBlockIndex++] : undefined;
+    const filename = fence.filename || hintedFilename || matchingFileBlock?.path || "";
+
+    codeBlocks.push({
+      filename,
+      language: fence.language || matchingFileBlock?.language || "",
+      content
+    });
+  }
+
+  return codeBlocks;
 };
 
 export const downloadFileBundle = async (files: ExtractedFile[], archiveName: string) => {
@@ -123,23 +178,21 @@ export const downloadTextFile = ({
 
 export const inferCodeBlockFilename = ({
   messageContent,
-  codeContent,
   language,
   blockIndex
 }: {
   messageContent: string;
-  codeContent: string;
   language: string;
   blockIndex: number;
 }) => {
-  const extractedFiles = extractFilesFromMarkdown(messageContent);
-  const matched = extractedFiles.find((file) => file.content.trim() === codeContent.trim());
+  const codeBlock = extractCodeBlocksFromMarkdown(messageContent)[blockIndex];
+  const providedFilename = sanitizePath(codeBlock?.filename ?? "");
 
-  if (matched) {
-    return matched.path.split("/").pop() || matched.path;
+  if (providedFilename) {
+    return baseName(providedFilename);
   }
 
-  const normalizedLanguage = language.toLowerCase().trim();
+  const normalizedLanguage = (language || codeBlock?.language || "").toLowerCase().trim();
   const extension = languageExtensionMap[normalizedLanguage] ?? "txt";
   return `sabio-code-${blockIndex + 1}.${extension}`;
 };

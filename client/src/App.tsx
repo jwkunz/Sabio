@@ -538,58 +538,66 @@ function App() {
                 )}
               </div>
               {message.role === "assistant" ? (
-                <ReactMarkdown
-                  className="markdown-body"
-                  rehypePlugins={[rehypeHighlight]}
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    code(props) {
-                      const { children, className, ...rest } = props;
-                      const codeValue = String(children).replace(/\n$/, "");
-                      const isBlock = codeValue.includes("\n");
-                      const language = className?.replace(/^language-/, "") ?? "";
+                (() => {
+                  let codeBlockIndex = 0;
 
-                      if (!isBlock) {
-                        return (
-                          <code className={className} {...rest}>
-                            {children}
-                          </code>
-                        );
-                      }
+                  return (
+                    <ReactMarkdown
+                      className="markdown-body"
+                      rehypePlugins={[rehypeHighlight]}
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        code(props) {
+                          const { children, className, ...rest } = props;
+                          const codeValue = String(children).replace(/\n$/, "");
+                          const isBlock = codeValue.includes("\n");
+                          const language = className?.replace(/^language-/, "") ?? "";
 
-                      return (
-                        <div className="code-block">
-                          <div className="code-block-actions">
-                            <button type="button" onClick={() => copyText(codeValue)}>
-                              Copy code
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                downloadTextFile({
-                                  content: codeValue,
-                                  filename: inferCodeBlockFilename({
-                                    messageContent: message.content,
-                                    codeContent: codeValue,
-                                    language,
-                                    blockIndex: 0
-                                  })
-                                })
-                              }
-                            >
-                              Download file
-                            </button>
-                          </div>
-                          <code className={className} {...rest}>
-                            {children}
-                          </code>
-                        </div>
-                      );
-                    }
-                  }}
-                >
-                  {message.content}
-                </ReactMarkdown>
+                          if (!isBlock) {
+                            return (
+                              <code className={className} {...rest}>
+                                {children}
+                              </code>
+                            );
+                          }
+
+                          const currentBlockIndex = codeBlockIndex;
+                          codeBlockIndex += 1;
+
+                          return (
+                            <div className="code-block">
+                              <div className="code-block-actions">
+                                <button type="button" onClick={() => copyText(codeValue)}>
+                                  Copy code
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    downloadTextFile({
+                                      content: codeValue,
+                                      filename: inferCodeBlockFilename({
+                                        messageContent: message.content,
+                                        language,
+                                        blockIndex: currentBlockIndex
+                                      })
+                                    })
+                                  }
+                                >
+                                  Download file
+                                </button>
+                              </div>
+                              <code className={className} {...rest}>
+                                {children}
+                              </code>
+                            </div>
+                          );
+                        }
+                      }}
+                    >
+                      {message.content}
+                    </ReactMarkdown>
+                  );
+                })()
               ) : (
                 <p>{message.content}</p>
               )}
