@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import rehypeHighlight from "rehype-highlight";
+import rehypeKatex from "rehype-katex";
 import { buildPrompt, DEFAULT_SYSTEM_PROMPT, trimHistoryForContext } from "../../shared/prompt";
 import logoUrl from "../../assets/Sabio_logo.png";
 import versionText from "../../VERSION?raw";
@@ -598,8 +600,8 @@ function App() {
                   return (
                     <ReactMarkdown
                       className="markdown-body"
-                      rehypePlugins={[rehypeHighlight]}
-                      remarkPlugins={[remarkGfm]}
+                  rehypePlugins={[rehypeKatex, rehypeHighlight]}
+                  remarkPlugins={[remarkGfm, remarkMath]}
                       components={{
                         code(props) {
                           const { children, className, ...rest } = props;
@@ -663,7 +665,11 @@ function App() {
               <div className="message-meta">
                 <span>Sabio</span>
               </div>
-              <ReactMarkdown className="markdown-body" remarkPlugins={[remarkGfm]}>
+              <ReactMarkdown
+                className="markdown-body"
+                rehypePlugins={[rehypeKatex]}
+                remarkPlugins={[remarkGfm, remarkMath]}
+              >
                 {streamingContent}
               </ReactMarkdown>
             </article>
