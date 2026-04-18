@@ -59,13 +59,19 @@ function App() {
   const [lastRequest, setLastRequest] = useState<{ input: string; baseMessages: Message[] } | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [activePanel, setActivePanel] = useState<"help" | "legal" | null>(null);
+  const [promptHistoryCursor, setPromptHistoryCursor] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ startX: number; widths: PaneWidths; handle: "left" | "right" } | null>(null);
+  const draftBeforeHistoryRef = useRef("");
 
   const selectedFiles = useMemo(
     () => files.filter((file) => file.isSelected).sort((a, b) => a.uploadedAt - b.uploadedAt),
     [files]
+  );
+  const promptHistory = useMemo(
+    () => messages.filter((message) => message.role === "user").map((message) => message.content),
+    [messages]
   );
 
   useEffect(() => {
@@ -199,11 +205,54 @@ function App() {
     };
   }, []);
 
-  const updateDraftInput = (value: string) =>
+  const updateDraftInput = (value: string, options?: { preserveHistoryCursor?: boolean }) => {
+    if (!options?.preserveHistoryCursor) {
+      setPromptHistoryCursor(null);
+      draftBeforeHistoryRef.current = "";
+    }
+
     setSession((current) => ({
       ...current,
       draftInput: value
     }));
+  };
+
+  const navigatePromptHistory = (direction: "up" | "down") => {
+    if (promptHistory.length === 0) {
+      return;
+    }
+
+    if (promptHistoryCursor === null) {
+      if (direction === "down") {
+        return;
+      }
+
+      draftBeforeHistoryRef.current = session.draftInput;
+      const nextCursor = promptHistory.length - 1;
+      setPromptHistoryCursor(nextCursor);
+      updateDraftInput(promptHistory[nextCursor], { preserveHistoryCursor: true });
+      return;
+    }
+
+    if (direction === "up") {
+      const nextCursor = Math.max(0, promptHistoryCursor - 1);
+      setPromptHistoryCursor(nextCursor);
+      updateDraftInput(promptHistory[nextCursor], { preserveHistoryCursor: true });
+      return;
+    }
+
+    const nextCursor = promptHistoryCursor + 1;
+
+    if (nextCursor >= promptHistory.length) {
+      setPromptHistoryCursor(null);
+      updateDraftInput(draftBeforeHistoryRef.current, { preserveHistoryCursor: true });
+      draftBeforeHistoryRef.current = "";
+      return;
+    }
+
+    setPromptHistoryCursor(nextCursor);
+    updateDraftInput(promptHistory[nextCursor], { preserveHistoryCursor: true });
+  };
 
   const submitPrompt = async ({
     input,
@@ -248,6 +297,8 @@ function App() {
       ...current,
       draftInput: ""
     }));
+    setPromptHistoryCursor(null);
+    draftBeforeHistoryRef.current = "";
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -629,17 +680,41 @@ function App() {
         </div>
 
         <div className="composer">
-          <textarea
-            placeholder="Write a prompt. Press Ctrl+Shift+Enter to send."
-            value={session.draftInput}
-            onChange={(event) => updateDraftInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && event.ctrlKey && event.shiftKey) {
-                event.preventDefault();
-                void handleSend();
-              }
-            }}
-          />
+          <div className="composer-input-row">
+            <div className="prompt-history-controls" aria-label="Prompt history controls">
+              <button
+                type="button"
+                className="secondary-button"
+                aria-label="Previous prompt"
+                title="Previous prompt"
+                onClick={() => navigatePromptHistory("up")}
+                disabled={promptHistory.length === 0}
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                aria-label="Next prompt"
+                title="Next prompt"
+                onClick={() => navigatePromptHistory("down")}
+                disabled={promptHistory.length === 0 || promptHistoryCursor === null}
+              >
+                ↓
+              </button>
+            </div>
+            <textarea
+              placeholder="Write a prompt. Press Ctrl+Shift+Enter to send."
+              value={session.draftInput}
+              onChange={(event) => updateDraftInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && event.ctrlKey && event.shiftKey) {
+                  event.preventDefault();
+                  void handleSend();
+                }
+              }}
+            />
+          </div>
           <div className="composer-actions">
             <div className="selection-summary">
               <span>{selectedFiles.length} files selected</span>
