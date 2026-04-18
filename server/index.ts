@@ -63,8 +63,14 @@ app.post("/api/upload", upload.array("files"), async (req, res, next) => {
 app.post("/api/chat", async (req, res, next) => {
   const controller = new AbortController();
 
-  req.on("close", () => {
+  req.on("aborted", () => {
     controller.abort();
+  });
+
+  res.on("close", () => {
+    if (!res.writableEnded) {
+      controller.abort();
+    }
   });
 
   try {
@@ -145,6 +151,11 @@ app.post("/api/chat", async (req, res, next) => {
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const status = error instanceof AppError ? error.status : 500;
+  console.error("[sabio]", {
+    status,
+    error: error instanceof AppError ? error.message : "Unexpected server error.",
+    detail: error instanceof Error ? error.message : toErrorMessage(error)
+  });
   res.status(status).json({
     error: error instanceof AppError ? error.message : "Unexpected server error.",
     detail: error instanceof Error ? error.message : toErrorMessage(error)
