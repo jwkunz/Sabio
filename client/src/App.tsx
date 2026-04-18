@@ -5,7 +5,12 @@ import rehypeHighlight from "rehype-highlight";
 import { buildPrompt, DEFAULT_SYSTEM_PROMPT, trimHistoryForContext } from "../../shared/prompt";
 import logoUrl from "../../assets/Sabio_logo.png";
 import { clearMessages, loadFiles, loadMessages, loadSession, saveFiles, saveMessages, saveSession } from "./lib/db";
-import { downloadFileBundle, extractFilesFromMarkdown } from "./lib/fileBundle";
+import {
+  downloadFileBundle,
+  downloadTextFile,
+  extractFilesFromMarkdown,
+  inferCodeBlockFilename
+} from "./lib/fileBundle";
 import type { Message, ModelOption, PaneWidths, SessionState, UploadedFile } from "./types/app";
 
 const createMessage = (role: Message["role"], content: string): Message => ({
@@ -542,6 +547,7 @@ function App() {
                       const { children, className, ...rest } = props;
                       const codeValue = String(children).replace(/\n$/, "");
                       const isBlock = codeValue.includes("\n");
+                      const language = className?.replace(/^language-/, "") ?? "";
 
                       if (!isBlock) {
                         return (
@@ -553,9 +559,27 @@ function App() {
 
                       return (
                         <div className="code-block">
-                          <button type="button" onClick={() => copyText(codeValue)}>
-                            Copy code
-                          </button>
+                          <div className="code-block-actions">
+                            <button type="button" onClick={() => copyText(codeValue)}>
+                              Copy code
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                downloadTextFile({
+                                  content: codeValue,
+                                  filename: inferCodeBlockFilename({
+                                    messageContent: message.content,
+                                    codeContent: codeValue,
+                                    language,
+                                    blockIndex: 0
+                                  })
+                                })
+                              }
+                            >
+                              Download file
+                            </button>
+                          </div>
                           <code className={className} {...rest}>
                             {children}
                           </code>

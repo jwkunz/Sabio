@@ -76,3 +76,70 @@ export const downloadFileBundle = async (files: ExtractedFile[], archiveName: st
   anchor.click();
   URL.revokeObjectURL(url);
 };
+
+const languageExtensionMap: Record<string, string> = {
+  js: "js",
+  jsx: "jsx",
+  ts: "ts",
+  tsx: "tsx",
+  py: "py",
+  rb: "rb",
+  go: "go",
+  java: "java",
+  c: "c",
+  cpp: "cpp",
+  cs: "cs",
+  rs: "rs",
+  html: "html",
+  css: "css",
+  scss: "scss",
+  json: "json",
+  md: "md",
+  markdown: "md",
+  sh: "sh",
+  bash: "sh",
+  sql: "sql",
+  yml: "yml",
+  yaml: "yaml",
+  xml: "xml",
+  txt: "txt"
+};
+
+export const downloadTextFile = ({
+  content,
+  filename
+}: {
+  content: string;
+  filename: string;
+}) => {
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+};
+
+export const inferCodeBlockFilename = ({
+  messageContent,
+  codeContent,
+  language,
+  blockIndex
+}: {
+  messageContent: string;
+  codeContent: string;
+  language: string;
+  blockIndex: number;
+}) => {
+  const extractedFiles = extractFilesFromMarkdown(messageContent);
+  const matched = extractedFiles.find((file) => file.content.trim() === codeContent.trim());
+
+  if (matched) {
+    return matched.path.split("/").pop() || matched.path;
+  }
+
+  const normalizedLanguage = language.toLowerCase().trim();
+  const extension = languageExtensionMap[normalizedLanguage] ?? "txt";
+  return `sabio-code-${blockIndex + 1}.${extension}`;
+};

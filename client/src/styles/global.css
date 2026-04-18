@@ -64,6 +64,11 @@ button:hover {
   backdrop-filter: blur(22px);
 }
 
+.pane-left {
+  display: flex;
+  flex-direction: column;
+}
+
 .pane-left,
 .pane-right {
   background: rgba(13, 16, 22, 0.88);
@@ -119,7 +124,7 @@ button:hover {
 
 .scrollable {
   overflow-y: auto;
-  max-height: calc(100vh - 78px);
+  max-height: calc(100vh - 150px);
 }
 
 .hero {
@@ -131,8 +136,8 @@ button:hover {
 }
 
 .hero img {
-  width: min(180px, 20vw);
-  max-height: 88px;
+  width: min(260px, 28vw);
+  max-height: 128px;
   object-fit: contain;
   filter: drop-shadow(0 12px 22px rgba(0, 0, 0, 0.45));
 }
@@ -233,10 +238,15 @@ button:hover {
 }
 
 .code-block button {
+  padding: 0.45rem 0.7rem;
+}
+
+.code-block-actions {
   position: absolute;
   right: 0.75rem;
   top: 0.75rem;
-  padding: 0.45rem 0.7rem;
+  display: flex;
+  gap: 0.5rem;
 }
 
 .composer {
@@ -329,6 +339,24 @@ button:hover {
   flex-direction: column;
 }
 
+.pane-left .pane-content {
+  flex: 1;
+}
+
+.pane-footer {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0 1.25rem 1.25rem;
+  margin-top: auto;
+  border-top: 1px solid var(--border);
+  background: rgba(13, 16, 22, 0.92);
+}
+
+.pane-footer button {
+  margin-top: 1rem;
+  flex: 1;
+}
+
 .error-banner {
   display: flex;
   justify-content: space-between;
@@ -339,6 +367,54 @@ button:hover {
   border-radius: 16px;
   padding: 0.9rem 1rem;
   color: #ffd4d4;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  background: rgba(4, 7, 12, 0.62);
+  backdrop-filter: blur(6px);
+}
+
+.dialog {
+  width: min(760px, 100%);
+  max-height: min(82vh, 920px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  background: linear-gradient(180deg, #161b25 0%, #10151d 100%);
+  box-shadow: var(--shadow);
+}
+
+.dialog-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.25rem 1.4rem;
+  border-bottom: 1px solid var(--border);
+  background: rgba(22, 27, 37, 0.94);
+}
+
+.dialog-header h2 {
+  margin: 0;
+}
+
+.dialog-body {
+  padding: 1.4rem;
+  line-height: 1.72;
+}
+
+.dialog-body p {
+  margin: 0 0 1rem;
 }
 
 @media (max-width: 1080px) {
