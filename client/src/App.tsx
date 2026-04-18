@@ -763,6 +763,10 @@ function App() {
 
           <label className="field">
             <span>System prompt</span>
+            <small>
+              This text is prepended to every chat request before the conversation, selected files, and your current
+              prompt.
+            </small>
             <textarea
               rows={18}
               value={session.systemPrompt}
@@ -810,8 +814,14 @@ function App() {
                 <p>
                   Begin by selecting a model in the settings pane. Sabio reads the model list from your local Ollama
                   instance and remembers the selected model between sessions. You can also edit the system prompt in
-                  the settings pane to change response style, formatting rules, or task constraints, then restore the
-                  default behavior at any time with <strong>Reset default prompt</strong>.
+                  the settings pane to change response style, formatting rules, or task constraints. The system prompt
+                  is prepended to every chat request before the conversation history, selected files, and your current
+                  prompt. Restore the default behavior at any time with <strong>Reset default prompt</strong>.
+                </p>
+                <p>
+                  <strong>Pro-tip:</strong> You can ask the model itself to generate a strong system prompt for a
+                  specific application. Describe the role, audience, preferred output format, constraints, and examples
+                  of good behavior, then paste the generated prompt into the system prompt editor.
                 </p>
                 <p>
                   To provide source material, use <strong>Upload</strong> in the file pane. Sabio extracts raw text
