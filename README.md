@@ -1,5 +1,9 @@
 # Sabio
 
+![Sabio logo](assets/Sabio_logo.png)
+
+**Version:** V1.0.0
+
 Sabio is a local-first Ollama workspace with:
 
 - a React three-pane UI

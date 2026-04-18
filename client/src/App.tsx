@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { buildPrompt, DEFAULT_SYSTEM_PROMPT, trimHistoryForContext } from "../../shared/prompt";
 import logoUrl from "../../assets/Sabio_logo.png";
+import versionText from "../../VERSION?raw";
 import { clearMessages, loadFiles, loadMessages, loadSession, saveFiles, saveMessages, saveSession } from "./lib/db";
 import {
   downloadFileBundle,
@@ -27,6 +28,7 @@ const defaultPaneWidths: PaneWidths = {
 };
 
 const copyText = async (value: string) => navigator.clipboard.writeText(value);
+const appVersion = versionText.trim();
 
 const downloadMarkdown = (content: string, createdAt: number) => {
   const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
@@ -483,6 +485,7 @@ function App() {
           <div>
             <h1>Sabio</h1>
             <p>Local Ollama Workspace</p>
+            <span className="hero-version">{appVersion}</span>
           </div>
         </div>
 
