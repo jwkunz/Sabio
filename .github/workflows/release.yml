@@ -87,13 +87,33 @@ jobs:
         run: npm run check
 
       - name: Build
-        run: ./build.sh
+        shell: bash
+        run: bash ./build.sh
+
+      - name: Verify distribution output
+        shell: bash
+        run: |
+          test -d dist
+          test -d dist/client
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            test -f dist/sabio-server.exe
+          else
+            test -f dist/sabio-server
+          fi
 
       - name: Stage release bundle
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           mkdir -p release
           cp -R dist "release/${{ matrix.artifact }}"
+
+      - name: Stage Windows release bundle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item -Recurse -Force dist "release/${{ matrix.artifact }}"
 
       - name: Create tar archive
         if: matrix.archive == 'tar'
