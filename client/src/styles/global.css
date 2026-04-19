@@ -309,6 +309,12 @@ button:hover {
   color: #111318;
 }
 
+.field select option:checked,
+.field select option:hover {
+  background: #d7eef6;
+  color: #071018;
+}
+
 .composer textarea {
   min-height: 124px;
   resize: vertical;

@@ -67,6 +67,7 @@ function App() {
   });
   const [systemPromptProfiles, setSystemPromptProfiles] = useState<SystemPromptProfile[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
+  const [modelStatus, setModelStatus] = useState("");
   const [streamingContent, setStreamingContent] = useState("");
   const [status, setStatus] = useState("Loading session...");
   const [error, setError] = useState("");
@@ -95,6 +96,38 @@ function App() {
     () => messages.filter((message) => message.role === "user").map((message) => message.content),
     [messages]
   );
+
+  const loadModelOptions = async () => {
+    setModelStatus("Loading models...");
+
+    try {
+      const response = await fetch("/api/models");
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Model discovery failed.");
+      }
+
+      const { models: modelOptions } = (await response.json()) as { models: ModelOption[] };
+
+      setModels(modelOptions);
+      setModelStatus(modelOptions.length > 0 ? `${modelOptions.length} models available.` : "No Ollama models found.");
+      setSession((current) => {
+        if (current.selectedModel && modelOptions.some((model) => model.name === current.selectedModel)) {
+          return current;
+        }
+
+        return {
+          ...current,
+          selectedModel: modelOptions[0]?.name ?? ""
+        };
+      });
+    } catch (modelError) {
+      setModels([]);
+      setModelStatus((modelError as Error).message || "Unable to load models.");
+      setError("Ollama is unavailable. Start Ollama locally to list models.");
+    }
+  };
 
   useEffect(() => {
     const hydrate = async () => {
@@ -188,30 +221,7 @@ function App() {
       return;
     }
 
-    fetch("/api/models")
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error("Model discovery failed.");
-        }
-
-        return response.json() as Promise<{ models: ModelOption[] }>;
-      })
-      .then(({ models: modelOptions }) => {
-        setModels(modelOptions);
-        setSession((current) => {
-          if (current.selectedModel && modelOptions.some((model) => model.name === current.selectedModel)) {
-            return current;
-          }
-
-          return {
-            ...current,
-            selectedModel: modelOptions[0]?.name ?? ""
-          };
-        });
-      })
-      .catch(() => {
-        setError("Ollama is unavailable. Start Ollama locally to list models.");
-      });
+    void loadModelOptions();
   }, [isHydrated]);
 
   useEffect(() => {
@@ -895,6 +905,7 @@ function App() {
         <div className="pane-content scrollable settings-stack">
           <label className="field">
             <span>Model</span>
+            <small>{modelStatus || "Models are loaded from the local Ollama endpoint."}</small>
             <select
               value={session.selectedModel}
               onChange={(event) =>
@@ -912,6 +923,9 @@ function App() {
               ))}
             </select>
           </label>
+          <button type="button" className="secondary-button" onClick={() => void loadModelOptions()}>
+            Refresh models
+          </button>
 
           <label className="field">
             <span>System prompt profile</span>
