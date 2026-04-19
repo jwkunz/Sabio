@@ -294,7 +294,8 @@ button:hover {
 
 .composer textarea,
 .field textarea,
-.field select {
+.field select,
+.field input {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -360,6 +361,10 @@ button:hover {
   display: block;
 }
 
+.compact-field {
+  padding-bottom: 1rem;
+}
+
 .field span {
   display: block;
   margin-bottom: 0.55rem;
@@ -383,6 +388,18 @@ button:hover {
 .settings-stack {
   display: flex;
   flex-direction: column;
+}
+
+.settings-button-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.danger-button {
+  border-color: rgba(255, 122, 122, 0.35);
+  background: rgba(255, 122, 122, 0.1);
+  color: #ffd4d4;
 }
 
 .pane-left .pane-content {

@@ -4,10 +4,20 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
-import { buildPrompt, DEFAULT_SYSTEM_PROMPT, trimHistoryForContext } from "../../shared/prompt";
+import { BUILT_IN_SYSTEM_PROMPT_PROFILES, buildPrompt, DEFAULT_SYSTEM_PROMPT, trimHistoryForContext } from "../../shared/prompt";
 import logoUrl from "../../assets/Sabio_logo.png";
 import versionText from "../../VERSION?raw";
-import { clearMessages, loadFiles, loadMessages, loadSession, saveFiles, saveMessages, saveSession } from "./lib/db";
+import {
+  clearMessages,
+  loadFiles,
+  loadMessages,
+  loadSession,
+  loadSystemPromptProfiles,
+  saveFiles,
+  saveMessages,
+  saveSession,
+  saveSystemPromptProfiles
+} from "./lib/db";
 import {
   downloadFileBundle,
   downloadTextFile,
@@ -15,7 +25,7 @@ import {
   inferCodeBlockFilename
 } from "./lib/fileBundle";
 import { normalizeMathDelimiters } from "./lib/markdown";
-import type { Message, ModelOption, PaneWidths, SessionState, UploadedFile } from "./types/app";
+import type { Message, ModelOption, PaneWidths, SessionState, SystemPromptProfile, UploadedFile } from "./types/app";
 
 const createMessage = (role: Message["role"], content: string): Message => ({
   id: crypto.randomUUID(),
@@ -50,9 +60,11 @@ function App() {
   const [session, setSession] = useState<SessionState>({
     selectedModel: "",
     systemPrompt: DEFAULT_SYSTEM_PROMPT,
+    selectedSystemPromptProfileId: "generic",
     draftInput: "",
     paneWidths: defaultPaneWidths
   });
+  const [systemPromptProfiles, setSystemPromptProfiles] = useState<SystemPromptProfile[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [streamingContent, setStreamingContent] = useState("");
   const [status, setStatus] = useState("Loading session...");
@@ -72,6 +84,12 @@ function App() {
     () => files.filter((file) => file.isSelected).sort((a, b) => a.uploadedAt - b.uploadedAt),
     [files]
   );
+  const selectedSystemPromptProfile = useMemo(
+    () =>
+      systemPromptProfiles.find((profile) => profile.id === session.selectedSystemPromptProfileId) ??
+      systemPromptProfiles.find((profile) => profile.id === "generic"),
+    [session.selectedSystemPromptProfileId, systemPromptProfiles]
+  );
   const promptHistory = useMemo(
     () => messages.filter((message) => message.role === "user").map((message) => message.content),
     [messages]
@@ -84,12 +102,25 @@ function App() {
         loadMessages(),
         loadFiles()
       ]);
+      const profiles = await loadSystemPromptProfiles();
+      const selectedProfile =
+        profiles.find((profile) => profile.id === storedSession.selectedSystemPromptProfileId) ??
+        profiles.find((profile) => profile.id === "generic");
+      const systemPrompt = storedSession.systemPrompt || selectedProfile?.content || DEFAULT_SYSTEM_PROMPT;
 
       setSession({
         ...storedSession,
-        systemPrompt: storedSession.systemPrompt || DEFAULT_SYSTEM_PROMPT,
+        systemPrompt,
+        selectedSystemPromptProfileId: selectedProfile?.id ?? "generic",
         paneWidths: storedSession.paneWidths || defaultPaneWidths
       });
+      setSystemPromptProfiles(
+        profiles.map((profile) =>
+          profile.id === selectedProfile?.id && storedSession.systemPrompt
+            ? { ...profile, content: storedSession.systemPrompt, updatedAt: Date.now() }
+            : profile
+        )
+      );
       setMessages(storedMessages);
       setFiles(storedFiles);
       setStatus("");
@@ -132,6 +163,16 @@ function App() {
       setError("Unable to persist files.");
     });
   }, [isHydrated, files]);
+
+  useEffect(() => {
+    if (!isHydrated || systemPromptProfiles.length === 0) {
+      return;
+    }
+
+    saveSystemPromptProfiles(systemPromptProfiles).catch(() => {
+      setError("Unable to persist system prompt profiles.");
+    });
+  }, [isHydrated, systemPromptProfiles]);
 
   useEffect(() => {
     if (!isHydrated) {
@@ -217,6 +258,97 @@ function App() {
     setSession((current) => ({
       ...current,
       draftInput: value
+    }));
+  };
+
+  const updateSelectedSystemPromptProfile = (profileId: string) => {
+    const profile = systemPromptProfiles.find((entry) => entry.id === profileId);
+
+    if (!profile) {
+      return;
+    }
+
+    setSession((current) => ({
+      ...current,
+      selectedSystemPromptProfileId: profile.id,
+      systemPrompt: profile.content
+    }));
+  };
+
+  const updateSystemPrompt = (content: string) => {
+    const now = Date.now();
+
+    setSession((current) => ({
+      ...current,
+      systemPrompt: content
+    }));
+    setSystemPromptProfiles((current) =>
+      current.map((profile) =>
+        profile.id === session.selectedSystemPromptProfileId ? { ...profile, content, updatedAt: now } : profile
+      )
+    );
+  };
+
+  const createCustomSystemPromptProfile = () => {
+    const existingCustomCount = systemPromptProfiles.filter((profile) => !profile.isBuiltIn).length;
+    const profile: SystemPromptProfile = {
+      id: `custom-${crypto.randomUUID()}`,
+      name: `Custom ${existingCustomCount + 1}`,
+      content: session.systemPrompt || selectedSystemPromptProfile?.content || DEFAULT_SYSTEM_PROMPT,
+      isBuiltIn: false,
+      updatedAt: Date.now()
+    };
+
+    setSystemPromptProfiles((current) => [...current, profile]);
+    setSession((current) => ({
+      ...current,
+      selectedSystemPromptProfileId: profile.id,
+      systemPrompt: profile.content
+    }));
+  };
+
+  const renameSelectedSystemPromptProfile = (name: string) => {
+    setSystemPromptProfiles((current) =>
+      current.map((profile) =>
+        profile.id === session.selectedSystemPromptProfileId
+          ? { ...profile, name: name || "Untitled profile", updatedAt: Date.now() }
+          : profile
+      )
+    );
+  };
+
+  const resetSelectedSystemPromptProfile = () => {
+    const builtIn = BUILT_IN_SYSTEM_PROMPT_PROFILES.find(
+      (profile) => profile.id === session.selectedSystemPromptProfileId
+    );
+    const content = builtIn?.content ?? DEFAULT_SYSTEM_PROMPT;
+
+    setSession((current) => ({
+      ...current,
+      systemPrompt: content
+    }));
+    setSystemPromptProfiles((current) =>
+      current.map((profile) =>
+        profile.id === session.selectedSystemPromptProfileId
+          ? { ...profile, content, updatedAt: Date.now() }
+          : profile
+      )
+    );
+  };
+
+  const deleteSelectedSystemPromptProfile = () => {
+    if (!selectedSystemPromptProfile || selectedSystemPromptProfile.isBuiltIn) {
+      return;
+    }
+
+    const generic = systemPromptProfiles.find((profile) => profile.id === "generic");
+    const nextProfiles = systemPromptProfiles.filter((profile) => profile.id !== selectedSystemPromptProfile.id);
+
+    setSystemPromptProfiles(nextProfiles);
+    setSession((current) => ({
+      ...current,
+      selectedSystemPromptProfileId: generic?.id ?? "generic",
+      systemPrompt: generic?.content ?? DEFAULT_SYSTEM_PROMPT
     }));
   };
 
@@ -773,6 +905,32 @@ function App() {
           </label>
 
           <label className="field">
+            <span>System prompt profile</span>
+            <small>Select a saved system prompt profile. Built-in profiles can be edited locally and reset.</small>
+            <select
+              value={session.selectedSystemPromptProfileId}
+              onChange={(event) => updateSelectedSystemPromptProfile(event.target.value)}
+            >
+              {systemPromptProfiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.name}
+                  {profile.isBuiltIn ? "" : " (custom)"}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {selectedSystemPromptProfile && !selectedSystemPromptProfile.isBuiltIn ? (
+            <label className="field compact-field">
+              <span>Custom profile name</span>
+              <input
+                value={selectedSystemPromptProfile.name}
+                onChange={(event) => renameSelectedSystemPromptProfile(event.target.value)}
+              />
+            </label>
+          ) : null}
+
+          <label className="field">
             <span>System prompt</span>
             <small>
               This text is prepended to every chat request before the conversation, selected files, and your current
@@ -781,27 +939,24 @@ function App() {
             <textarea
               rows={18}
               value={session.systemPrompt}
-              onChange={(event) =>
-                setSession((current) => ({
-                  ...current,
-                  systemPrompt: event.target.value
-                }))
-              }
+              onChange={(event) => updateSystemPrompt(event.target.value)}
             />
           </label>
 
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() =>
-              setSession((current) => ({
-                ...current,
-                systemPrompt: DEFAULT_SYSTEM_PROMPT
-              }))
-            }
-          >
-            Reset default prompt
-          </button>
+          <div className="settings-button-row">
+            <button type="button" className="secondary-button" onClick={createCustomSystemPromptProfile}>
+              New custom profile
+            </button>
+            <button type="button" className="secondary-button" onClick={resetSelectedSystemPromptProfile}>
+              Reset profile
+            </button>
+          </div>
+
+          {selectedSystemPromptProfile && !selectedSystemPromptProfile.isBuiltIn ? (
+            <button type="button" className="danger-button" onClick={deleteSelectedSystemPromptProfile}>
+              Delete custom profile
+            </button>
+          ) : null}
         </div>
       </aside>
 
@@ -827,7 +982,14 @@ function App() {
                   instance and remembers the selected model between sessions. You can also edit the system prompt in
                   the settings pane to change response style, formatting rules, or task constraints. The system prompt
                   is prepended to every chat request before the conversation history, selected files, and your current
-                  prompt. Restore the default behavior at any time with <strong>Reset default prompt</strong>.
+                  prompt.
+                </p>
+                <p>
+                  System prompt profiles let you switch quickly between common modes such as generic assistance,
+                  software planning, software development, teaching, writing, brainstorming, and project planning.
+                  Built-in profiles are available immediately and are stored locally in your browser. You can also
+                  create custom profiles, name them, edit their prompts, and delete them later. Use
+                  <strong> Reset profile</strong> to restore a built-in profile to its default prompt.
                 </p>
                 <p>
                   <strong>Pro-tip:</strong> You can ask the model itself to generate a strong system prompt for a

@@ -27,8 +27,17 @@ export interface PaneWidths {
 export interface SessionState {
   selectedModel: string;
   systemPrompt: string;
+  selectedSystemPromptProfileId: string;
   draftInput: string;
   paneWidths: PaneWidths;
+}
+
+export interface SystemPromptProfile {
+  id: string;
+  name: string;
+  content: string;
+  isBuiltIn: boolean;
+  updatedAt: number;
 }
 
 export interface ModelOption {

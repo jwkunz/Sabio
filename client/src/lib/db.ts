@@ -1,13 +1,15 @@
 import { openDB } from "idb";
-import type { Message, SessionState, UploadedFile } from "../types/app";
+import { BUILT_IN_SYSTEM_PROMPT_PROFILES } from "../../../shared/prompt";
+import type { Message, SessionState, SystemPromptProfile, UploadedFile } from "../types/app";
 
 const DB_NAME = "sabio-db";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const SESSION_KEY = "session";
 
 const defaultSession: SessionState = {
   selectedModel: "",
   systemPrompt: "",
+  selectedSystemPromptProfileId: "generic",
   draftInput: "",
   paneWidths: {
     left: 22,
@@ -29,12 +31,23 @@ const dbPromise = openDB(DB_NAME, DB_VERSION, {
     if (!db.objectStoreNames.contains("session")) {
       db.createObjectStore("session");
     }
+
+    if (!db.objectStoreNames.contains("systemPromptProfiles")) {
+      db.createObjectStore("systemPromptProfiles", { keyPath: "id" });
+    }
   }
 });
 
 export const loadSession = async () => {
   const db = await dbPromise;
-  return ((await db.get("session", SESSION_KEY)) as SessionState | undefined) ?? defaultSession;
+  const stored = (await db.get("session", SESSION_KEY)) as Partial<SessionState> | undefined;
+
+  return {
+    ...defaultSession,
+    ...stored,
+    paneWidths: stored?.paneWidths ?? defaultSession.paneWidths,
+    selectedSystemPromptProfileId: stored?.selectedSystemPromptProfileId ?? "generic"
+  };
 };
 
 export const saveSession = async (session: SessionState) => {
@@ -79,4 +92,51 @@ export const saveFiles = async (files: UploadedFile[]) => {
 export const clearMessages = async () => {
   const db = await dbPromise;
   await db.clear("messages");
+};
+
+const builtInProfiles = (): SystemPromptProfile[] =>
+  BUILT_IN_SYSTEM_PROMPT_PROFILES.map((profile) => ({
+    ...profile,
+    isBuiltIn: true,
+    updatedAt: 0
+  }));
+
+export const loadSystemPromptProfiles = async () => {
+  const db = await dbPromise;
+  const stored = (await db.getAll("systemPromptProfiles")) as SystemPromptProfile[];
+  const byId = new Map<string, SystemPromptProfile>();
+
+  for (const profile of builtInProfiles()) {
+    byId.set(profile.id, profile);
+  }
+
+  for (const profile of stored) {
+    byId.set(profile.id, {
+      ...profile,
+      isBuiltIn: profile.isBuiltIn ?? false
+    });
+  }
+
+  const profiles = Array.from(byId.values()).sort((a, b) => {
+    if (a.isBuiltIn !== b.isBuiltIn) {
+      return a.isBuiltIn ? -1 : 1;
+    }
+
+    return a.name.localeCompare(b.name);
+  });
+
+  await saveSystemPromptProfiles(profiles);
+  return profiles;
+};
+
+export const saveSystemPromptProfiles = async (profiles: SystemPromptProfile[]) => {
+  const db = await dbPromise;
+  const tx = db.transaction("systemPromptProfiles", "readwrite");
+  await tx.store.clear();
+
+  for (const profile of profiles) {
+    await tx.store.put(profile);
+  }
+
+  await tx.done;
 };
