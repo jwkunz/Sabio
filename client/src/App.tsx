@@ -350,6 +350,10 @@ function App() {
 
           const payload = JSON.parse(line.slice(5).trim()) as { type: string; content?: string };
 
+          if (payload.type === "error") {
+            throw new Error(payload.content || "Chat stream failed.");
+          }
+
           if (payload.type === "chunk" && payload.content) {
             finalContent += payload.content;
             setStreamingContent(finalContent);

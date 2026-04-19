@@ -77,6 +77,9 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install dependencies
         run: npm ci
 
@@ -92,18 +95,24 @@ jobs:
           mkdir -p "release/${{ matrix.artifact }}"
           cp -R dist "release/${{ matrix.artifact }}/dist"
           cp -R assets "release/${{ matrix.artifact }}/assets"
-          cp -R server "release/${{ matrix.artifact }}/server"
           cp -R shared "release/${{ matrix.artifact }}/shared"
+          cp -R scripts "release/${{ matrix.artifact }}/scripts"
           cp package.json package-lock.json README.md VERSION tsconfig.json vite.config.ts "release/${{ matrix.artifact }}/"
+
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "server/target/release/sabio-server.exe" "release/${{ matrix.artifact }}/sabio-server.exe"
+          else
+            cp "server/target/release/sabio-server" "release/${{ matrix.artifact }}/sabio-server"
+          fi
 
           cat > "release/${{ matrix.artifact }}/README-RUN.txt" <<'EOF'
           Sabio release bundle
 
           1. Install Node.js 20 or newer.
           2. Run npm ci from this directory.
-          3. Start Ollama locally.
+          3. Install Ollama and pull at least one model.
           4. Run npm start.
-          5. Open http://127.0.0.1:3000.
+          5. Sabio will attempt to start Ollama if needed, launch the Rust backend, and open http://127.0.0.1:3000.
           EOF
 
       - name: Create tar archive
