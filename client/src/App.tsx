@@ -1202,6 +1202,10 @@ function App() {
               <div className="dialog-body">
                 <p><strong>Copyright 2026 Numerius Engineering LLC</strong></p>
                 <p>
+                  Sabio is distributed under the terms of the MIT License. See the repository LICENSE file for the full
+                  license text, including permissions, conditions, and warranty disclaimer.
+                </p>
+                <p>
                   Sabio is a local-first application. Sabio does not collect telemetry, analytics, usage metrics,
                   prompt histories, uploaded document contents, model responses, or any other application data for
                   centralized monitoring or vendor-side retention.
