@@ -169,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn build_router(state: AppState) -> Router {
-    let dist_dir = project_root().join("dist/client");
+    let dist_dir = frontend_dist_dir();
     let static_service = ServeDir::new(&dist_dir)
         .append_index_html_on_directories(true)
         .fallback(ServeDir::new(&dist_dir).append_index_html_on_directories(true));
@@ -522,17 +522,25 @@ fn open_browser(url: &str) {
     }
 }
 
-fn project_root() -> PathBuf {
+fn frontend_dist_dir() -> PathBuf {
     if let Ok(current_dir) = env::current_dir() {
         if current_dir.join("dist/client/index.html").exists() {
-            return current_dir;
+            return current_dir.join("dist/client");
+        }
+
+        if current_dir.join("client/index.html").exists() {
+            return current_dir.join("client");
         }
     }
 
     if let Ok(current_exe) = env::current_exe() {
         if let Some(exe_dir) = current_exe.parent() {
             if exe_dir.join("dist/client/index.html").exists() {
-                return exe_dir.to_path_buf();
+                return exe_dir.join("dist/client");
+            }
+
+            if exe_dir.join("client/index.html").exists() {
+                return exe_dir.join("client");
             }
         }
     }
@@ -540,5 +548,5 @@ fn project_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("server crate should live inside repository root")
-        .to_path_buf()
+        .join("dist/client")
 }

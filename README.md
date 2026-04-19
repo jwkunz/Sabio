@@ -76,6 +76,20 @@ The release archives contain the production frontend build and a platform-specif
 npm run build
 ```
 
+To create a clean runnable distribution folder with the Rust executable and built frontend assets:
+
+```bash
+./build.sh
+```
+
+This recreates `dist/` and stages:
+
+- `dist/sabio-server` or `dist/sabio-server.exe`
+- `dist/client/`
+- `dist/VERSION`
+- `dist/README.md`
+- `dist/README-RUN.txt`
+
 ## Requirements
 
 - Node.js 20+

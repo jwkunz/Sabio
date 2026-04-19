@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "npm run build && cargo run --manifest-path server/Cargo.toml",
     "build": "vite build && cargo build --manifest-path server/Cargo.toml --release",
+    "dist": "./build.sh",
     "start": "node scripts/start.mjs",
     "check": "tsc --noEmit && cargo check --manifest-path server/Cargo.toml"
   },
