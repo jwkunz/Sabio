@@ -22,7 +22,7 @@ cp "server/target/release/$BINARY_NAME" "dist/$BINARY_NAME"
 cp VERSION dist/VERSION
 cp docs/README.md dist/README.md
 cp -R assets dist/assets
-perl -0pi -e 's#\.\./assets/#assets/#g' dist/README.md
+node -e "const fs=require('fs'); const p='dist/README.md'; fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replaceAll('../assets/', 'assets/'));"
 
 cat > dist/README-RUN.txt <<EOF
 Sabio local distribution
