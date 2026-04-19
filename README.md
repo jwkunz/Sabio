@@ -27,4 +27,5 @@ To build Sabio from source, follow these steps:
 - npm (>= 6.x)
 --cargo >= 1.92
 - Git
+- Ollama with at least one model installed 
 
