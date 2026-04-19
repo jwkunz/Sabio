@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
-APP_NAME="sabio"
 BINARY_NAME="sabio-server"
 
 if [[ "${OS:-}" == "Windows_NT" ]]; then
@@ -21,7 +20,9 @@ npm run build
 echo "Staging release folder..."
 cp "server/target/release/$BINARY_NAME" "dist/$BINARY_NAME"
 cp VERSION dist/VERSION
-cp README.md dist/README.md
+cp docs/README.md dist/README.md
+cp -R assets dist/assets
+perl -0pi -e 's#\.\./assets/#assets/#g' dist/README.md
 
 cat > dist/README-RUN.txt <<EOF
 Sabio local distribution

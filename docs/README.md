@@ -1,6 +1,6 @@
 # Sabio
 
-![Sabio logo](assets/Sabio_logo.png)
+![Sabio logo](../assets/Sabio_logo.png)
 
 **Version:** V1.1.0
 
@@ -42,33 +42,32 @@ To install from one of these archives:
 
 1. Download the archive for your operating system from the GitHub release page.
 2. Extract the archive to a local folder.
-3. Install Node.js 20 or newer if it is not already installed.
-4. Install dependencies from inside the extracted Sabio folder:
-
-```bash
-npm ci
-```
-
-5. Install Ollama separately. Sabio expects Ollama at `http://127.0.0.1:11434` by default and will attempt to launch `ollama serve` if it is not already running.
-6. Install at least one Ollama model, for example:
+3. Install Ollama separately. Sabio expects Ollama at `http://127.0.0.1:11434` by default and will attempt to launch `ollama serve` if it is not already running.
+4. Install at least one Ollama model, for example:
 
 ```bash
 ollama pull llama3.2
 ```
 
-7. Start Sabio:
+5. Start Sabio from the extracted folder:
 
 ```bash
-npm start
+./sabio-server
 ```
 
-8. Open the local app in your browser:
+On Windows, run:
+
+```powershell
+.\sabio-server.exe
+```
+
+6. Open the local app in your browser if it does not open automatically:
 
 ```text
 http://127.0.0.1:3000
 ```
 
-The release archives contain the production frontend build and a platform-specific Rust backend binary. They are distributable application bundles, but they still require Node.js to install frontend/runtime package metadata and a local Ollama installation for model execution.
+The release archives contain the production frontend build and a platform-specific Rust backend binary. They do not require Node.js for normal use, but they still require a local Ollama installation for model execution.
 
 ## Build
 
@@ -86,6 +85,7 @@ This recreates `dist/` and stages:
 
 - `dist/sabio-server` or `dist/sabio-server.exe`
 - `dist/client/`
+- `dist/assets/`
 - `dist/VERSION`
 - `dist/README.md`
 - `dist/README-RUN.txt`
