@@ -722,6 +722,14 @@ function App() {
             <span className="hero-version">{appVersion}</span>
           </div>
         </div>
+        <div className="pane-footer">
+          <button type="button" className="secondary-button" onClick={() => setActivePanel("help")}>
+            Help
+          </button>
+          <button type="button" className="secondary-button" onClick={() => setActivePanel("legal")}>
+            Legal
+          </button>
+        </div>
         <div className="pane-header">
           <h2>Files</h2>
           <label className="upload-button">
@@ -765,14 +773,6 @@ function App() {
               </div>
             </article>
           ))}
-        </div>
-        <div className="pane-footer">
-          <button type="button" className="secondary-button" onClick={() => setActivePanel("help")}>
-            Help
-          </button>
-          <button type="button" className="secondary-button" onClick={() => setActivePanel("legal")}>
-            Legal
-          </button>
         </div>
       </aside>
 
@@ -1008,8 +1008,39 @@ function App() {
           <h2>Settings</h2>
         </div>
         <div className="pane-content scrollable settings-stack">
+          <section className="settings-card display-preferences-card">
+            <h3>Display Preferences</h3>
+            <label className="field">
+              <span>Color theme</span>
+              <small>Choose the interface contrast mode used for this browser session.</small>
+              <select
+                value={session.displayPreferences.theme}
+                onChange={(event) =>
+                  updateDisplayPreferences({ theme: event.target.value as DisplayTheme })
+                }
+              >
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Font size</span>
+              <small>Scale chat, controls, and settings text without changing your content.</small>
+              <select
+                value={session.displayPreferences.fontSize}
+                onChange={(event) =>
+                  updateDisplayPreferences({ fontSize: event.target.value as DisplayFontSize })
+                }
+              >
+                <option value="small">Small</option>
+                <option value="medium">Medium</option>
+                <option value="large">Large</option>
+              </select>
+            </label>
+          </section>
+
           <section className="settings-card">
-            <h3>Settings</h3>
+            <h3>Model Settings</h3>
             <label className="field">
               <span>Model</span>
               <small>{modelStatus || "Models are loaded from the local Ollama endpoint."}</small>
@@ -1088,37 +1119,6 @@ function App() {
                 Delete custom profile
               </button>
             ) : null}
-          </section>
-
-          <section className="settings-card display-preferences-card">
-            <h3>Display Preferences</h3>
-            <label className="field">
-              <span>Color theme</span>
-              <small>Choose the interface contrast mode used for this browser session.</small>
-              <select
-                value={session.displayPreferences.theme}
-                onChange={(event) =>
-                  updateDisplayPreferences({ theme: event.target.value as DisplayTheme })
-                }
-              >
-                <option value="dark">Dark</option>
-                <option value="light">Light</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>Font size</span>
-              <small>Scale chat, controls, and settings text without changing your content.</small>
-              <select
-                value={session.displayPreferences.fontSize}
-                onChange={(event) =>
-                  updateDisplayPreferences({ fontSize: event.target.value as DisplayFontSize })
-                }
-              >
-                <option value="small">Small</option>
-                <option value="medium">Medium</option>
-                <option value="large">Large</option>
-              </select>
-            </label>
           </section>
         </div>
       </aside>
