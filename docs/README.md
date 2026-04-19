@@ -2,7 +2,7 @@
 
 ![Sabio logo](../assets/Sabio_logo.png)
 
-**Version:** V1.1.0
+**Version:** V1.2.0
 
 Sabio is a local-first Ollama workspace with:
 
@@ -11,6 +11,8 @@ Sabio is a local-first Ollama workspace with:
 - IndexedDB session persistence
 - file upload and raw-text extraction
 - Markdown-first assistant responses
+- inline Thinking status while the local engine generates
+- local display preferences for dark/light theme and font scaling
 
 ## Run
 

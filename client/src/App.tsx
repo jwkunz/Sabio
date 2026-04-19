@@ -26,7 +26,16 @@ import {
   inferCodeBlockFilename
 } from "./lib/fileBundle";
 import { normalizeMathDelimiters } from "./lib/markdown";
-import type { Message, ModelOption, PaneWidths, SessionState, SystemPromptProfile, UploadedFile } from "./types/app";
+import type {
+  DisplayFontSize,
+  DisplayTheme,
+  Message,
+  ModelOption,
+  PaneWidths,
+  SessionState,
+  SystemPromptProfile,
+  UploadedFile
+} from "./types/app";
 
 const createMessage = (role: Message["role"], content: string): Message => ({
   id: crypto.randomUUID(),
@@ -41,8 +50,20 @@ const defaultPaneWidths: PaneWidths = {
   right: 26
 };
 
+const defaultDisplayPreferences = {
+  theme: "dark" as DisplayTheme,
+  fontSize: "medium" as DisplayFontSize
+};
+
 const copyText = async (value: string) => navigator.clipboard.writeText(value);
 const appVersion = versionText.trim();
+
+const formatElapsedSeconds = (seconds: number) => {
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+
+  return minutes > 0 ? `${minutes}m ${remainder}s` : `${remainder}s`;
+};
 
 const downloadMarkdown = (content: string, createdAt: number) => {
   const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
@@ -63,12 +84,16 @@ function App() {
     systemPrompt: DEFAULT_SYSTEM_PROMPT,
     selectedSystemPromptProfileId: "generic",
     draftInput: "",
-    paneWidths: defaultPaneWidths
+    paneWidths: defaultPaneWidths,
+    displayPreferences: defaultDisplayPreferences
   });
   const [systemPromptProfiles, setSystemPromptProfiles] = useState<SystemPromptProfile[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [modelStatus, setModelStatus] = useState("");
   const [streamingContent, setStreamingContent] = useState("");
+  const [generationStatus, setGenerationStatus] = useState("");
+  const [generationStartedAt, setGenerationStartedAt] = useState<number | null>(null);
+  const [generationElapsedSeconds, setGenerationElapsedSeconds] = useState(0);
   const [status, setStatus] = useState("Loading session...");
   const [error, setError] = useState("");
   const [contextWarning, setContextWarning] = useState("");
@@ -146,7 +171,8 @@ function App() {
         ...storedSession,
         systemPrompt,
         selectedSystemPromptProfileId: selectedProfile?.id ?? "generic",
-        paneWidths: storedSession.paneWidths || defaultPaneWidths
+        paneWidths: storedSession.paneWidths || defaultPaneWidths,
+        displayPreferences: storedSession.displayPreferences || defaultDisplayPreferences
       });
       setSystemPromptProfiles(
         profiles.map((profile) =>
@@ -168,7 +194,8 @@ function App() {
       setSession((current) => ({
         ...current,
         selectedSystemPromptProfileId: generic?.id ?? "generic",
-        systemPrompt: current.systemPrompt || generic?.content || DEFAULT_SYSTEM_PROMPT
+        systemPrompt: current.systemPrompt || generic?.content || DEFAULT_SYSTEM_PROMPT,
+        displayPreferences: current.displayPreferences || defaultDisplayPreferences
       }));
       setError("Unable to load local session data.");
       setStatus("");
@@ -229,7 +256,23 @@ function App() {
       top: chatScrollRef.current.scrollHeight,
       behavior: "smooth"
     });
-  }, [messages, streamingContent, error]);
+  }, [messages, streamingContent, generationStatus, generationElapsedSeconds, error]);
+
+  useEffect(() => {
+    if (!isGenerating || generationStartedAt === null) {
+      setGenerationElapsedSeconds(0);
+      return;
+    }
+
+    const updateElapsed = () => {
+      setGenerationElapsedSeconds(Math.max(0, Math.floor((Date.now() - generationStartedAt) / 1000)));
+    };
+
+    updateElapsed();
+    const intervalId = window.setInterval(updateElapsed, 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, [generationStartedAt, isGenerating]);
 
   useEffect(() => {
     const onMove = (event: MouseEvent) => {
@@ -445,6 +488,8 @@ function App() {
     setLastRequest({ input: input.trim(), baseMessages });
     setIsGenerating(true);
     setStreamingContent("");
+    setGenerationStartedAt(Date.now());
+    setGenerationStatus("Contacting the Ollama engine...");
     setMessages(nextMessages);
 
     setSession((current) => ({
@@ -475,6 +520,8 @@ function App() {
         const payload = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(payload?.error || "Chat request failed.");
       }
+
+      setGenerationStatus("Engine connected. Waiting for the first token...");
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -508,6 +555,13 @@ function App() {
           if (payload.type === "chunk" && payload.content) {
             finalContent += payload.content;
             setStreamingContent(finalContent);
+            setGenerationStatus(
+              `Streaming response: ${finalContent.length.toLocaleString()} characters received.`
+            );
+          }
+
+          if (payload.type === "done") {
+            setGenerationStatus("Finalizing response...");
           }
         }
       }
@@ -527,6 +581,8 @@ function App() {
       abortRef.current = null;
       setIsGenerating(false);
       setStreamingContent("");
+      setGenerationStartedAt(null);
+      setGenerationStatus("");
     }
   };
 
@@ -580,6 +636,8 @@ function App() {
   const handleCancel = () => {
     abortRef.current?.abort();
     setStreamingContent("");
+    setGenerationStartedAt(null);
+    setGenerationStatus("");
     setIsGenerating(false);
   };
 
@@ -629,6 +687,16 @@ function App() {
     await clearMessages();
   };
 
+  const updateDisplayPreferences = (updates: Partial<SessionState["displayPreferences"]>) => {
+    setSession((current) => ({
+      ...current,
+      displayPreferences: {
+        ...current.displayPreferences,
+        ...updates
+      }
+    }));
+  };
+
   const startResize = (handle: "left" | "right", clientX: number) => {
     dragRef.current = {
       startX: clientX,
@@ -642,8 +710,18 @@ function App() {
     activePanel === "help" ? "Help" : activePanel === "legal" ? "Legal" : "";
 
   return (
-    <div className="app-shell">
+    <div
+      className={`app-shell theme-${session.displayPreferences.theme} font-${session.displayPreferences.fontSize}`}
+    >
       <aside className="pane pane-left" style={{ width: `${session.paneWidths.left}%` }}>
+        <div className="brand-panel">
+          <img alt="Sabio logo" src={logoUrl} />
+          <div>
+            <h1>Sabio</h1>
+            <p>Local Ollama Workspace</p>
+            <span className="hero-version">{appVersion}</span>
+          </div>
+        </div>
         <div className="pane-header">
           <h2>Files</h2>
           <label className="upload-button">
@@ -654,26 +732,38 @@ function App() {
         <div className="pane-content scrollable">
           {files.length === 0 ? <p className="empty-state">Upload files to add local context.</p> : null}
           {files.map((file) => (
-            <label className="file-card" key={file.id}>
-              <input
-                checked={file.isSelected}
-                type="checkbox"
-                onChange={() =>
-                  setFiles((current) =>
-                    current.map((entry) =>
-                      entry.id === file.id ? { ...entry, isSelected: !entry.isSelected } : entry
+            <article className="file-card" key={file.id}>
+              <label className="file-include-toggle">
+                <input
+                  checked={file.isSelected}
+                  type="checkbox"
+                  onChange={() =>
+                    setFiles((current) =>
+                      current.map((entry) =>
+                        entry.id === file.id ? { ...entry, isSelected: !entry.isSelected } : entry
+                      )
                     )
-                  )
-                }
-              />
-              <div>
-                <strong>{file.name}</strong>
-                <p>{file.type || "text/plain"}</p>
-                <p>{Math.round(file.size / 1024)} KB</p>
-                <p>{new Date(file.uploadedAt).toLocaleString()}</p>
-                {file.warning ? <span className="warning-tag">{file.warning}</span> : null}
+                  }
+                />
+                <span>Included?</span>
+              </label>
+              <div className="file-card-body">
+                <div className="file-card-main">
+                  <strong>{file.name}</strong>
+                  <p>{file.type || "text/plain"}</p>
+                  <p>{Math.round(file.size / 1024)} KB</p>
+                  <p>{new Date(file.uploadedAt).toLocaleString()}</p>
+                  {file.warning ? <span className="warning-tag">{file.warning}</span> : null}
+                </div>
+                <button
+                  type="button"
+                  className="secondary-button remove-file-button"
+                  onClick={() => setFiles((current) => current.filter((entry) => entry.id !== file.id))}
+                >
+                  Remove
+                </button>
               </div>
-            </label>
+            </article>
           ))}
         </div>
         <div className="pane-footer">
@@ -689,15 +779,6 @@ function App() {
       <div className="splitter" onMouseDown={(event) => startResize("left", event.clientX)} />
 
       <main className="pane pane-center" style={{ width: `${session.paneWidths.center}%` }}>
-        <div className="hero">
-          <img alt="Sabio logo" src={logoUrl} />
-          <div>
-            <h1>Sabio</h1>
-            <p>Local Ollama Workspace</p>
-            <span className="hero-version">{appVersion}</span>
-          </div>
-        </div>
-
         <div className="toolbar">
           <button type="button" onClick={resetConversation}>
             Clear context
@@ -816,6 +897,30 @@ function App() {
             </article>
           ))}
 
+          {isGenerating ? (
+            <article className="message thinking-tile" aria-live="polite">
+              <div className="message-meta">
+                <span>Thinking</span>
+                <span>{formatElapsedSeconds(generationElapsedSeconds)}</span>
+              </div>
+              <div className="thinking-content">
+                <div className="thinking-pulse" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+                <div>
+                  <p>{generationStatus || "Preparing request..."}</p>
+                  <span>
+                    {streamingContent
+                      ? `${streamingContent.length.toLocaleString()} characters generated so far.`
+                      : "Waiting for the model to begin streaming tokens."}
+                  </span>
+                </div>
+              </div>
+            </article>
+          ) : null}
+
           {streamingContent ? (
             <article className="message message-assistant is-streaming">
               <div className="message-meta">
@@ -903,84 +1008,118 @@ function App() {
           <h2>Settings</h2>
         </div>
         <div className="pane-content scrollable settings-stack">
-          <label className="field">
-            <span>Model</span>
-            <small>{modelStatus || "Models are loaded from the local Ollama endpoint."}</small>
-            <select
-              value={session.selectedModel}
-              onChange={(event) =>
-                setSession((current) => ({
-                  ...current,
-                  selectedModel: event.target.value
-                }))
-              }
-            >
-              <option value="">Select a model</option>
-              {models.map((model) => (
-                <option key={model.name} value={model.name}>
-                  {model.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button type="button" className="secondary-button" onClick={() => void loadModelOptions()}>
-            Refresh models
-          </button>
+          <section className="settings-card">
+            <h3>Settings</h3>
+            <label className="field">
+              <span>Model</span>
+              <small>{modelStatus || "Models are loaded from the local Ollama endpoint."}</small>
+              <select
+                value={session.selectedModel}
+                onChange={(event) =>
+                  setSession((current) => ({
+                    ...current,
+                    selectedModel: event.target.value
+                  }))
+                }
+              >
+                <option value="">Select a model</option>
+                {models.map((model) => (
+                  <option key={model.name} value={model.name}>
+                    {model.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="button" className="secondary-button" onClick={() => void loadModelOptions()}>
+              Refresh models
+            </button>
 
-          <label className="field">
-            <span>System prompt profile</span>
-            <small>Select a saved system prompt profile. Built-in profiles can be edited locally and reset.</small>
-            <select
-              value={session.selectedSystemPromptProfileId}
-              onChange={(event) => updateSelectedSystemPromptProfile(event.target.value)}
-            >
-              {systemPromptProfiles.length === 0 ? <option value="generic">Generic</option> : null}
-              {systemPromptProfiles.map((profile) => (
-                <option key={profile.id} value={profile.id}>
-                  {profile.name}
-                  {profile.isBuiltIn ? "" : " (custom)"}
-                </option>
-              ))}
-            </select>
-          </label>
+            <label className="field">
+              <span>System prompt profile</span>
+              <small>Select a saved system prompt profile. Built-in profiles can be edited locally and reset.</small>
+              <select
+                value={session.selectedSystemPromptProfileId}
+                onChange={(event) => updateSelectedSystemPromptProfile(event.target.value)}
+              >
+                {systemPromptProfiles.length === 0 ? <option value="generic">Generic</option> : null}
+                {systemPromptProfiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name}
+                    {profile.isBuiltIn ? "" : " (custom)"}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-          {selectedSystemPromptProfile && !selectedSystemPromptProfile.isBuiltIn ? (
-            <label className="field compact-field">
-              <span>Custom profile name</span>
-              <input
-                value={selectedSystemPromptProfile.name}
-                onChange={(event) => renameSelectedSystemPromptProfile(event.target.value)}
+            {selectedSystemPromptProfile && !selectedSystemPromptProfile.isBuiltIn ? (
+              <label className="field compact-field">
+                <span>Custom profile name</span>
+                <input
+                  value={selectedSystemPromptProfile.name}
+                  onChange={(event) => renameSelectedSystemPromptProfile(event.target.value)}
+                />
+              </label>
+            ) : null}
+
+            <label className="field">
+              <span>System prompt</span>
+              <small>
+                This text is prepended to every chat request before the conversation, selected files, and your current
+                prompt.
+              </small>
+              <textarea
+                rows={18}
+                value={session.systemPrompt}
+                onChange={(event) => updateSystemPrompt(event.target.value)}
               />
             </label>
-          ) : null}
 
-          <label className="field">
-            <span>System prompt</span>
-            <small>
-              This text is prepended to every chat request before the conversation, selected files, and your current
-              prompt.
-            </small>
-            <textarea
-              rows={18}
-              value={session.systemPrompt}
-              onChange={(event) => updateSystemPrompt(event.target.value)}
-            />
-          </label>
+            <div className="settings-button-row">
+              <button type="button" className="secondary-button" onClick={createCustomSystemPromptProfile}>
+                New custom profile
+              </button>
+              <button type="button" className="secondary-button" onClick={resetSelectedSystemPromptProfile}>
+                Reset profile
+              </button>
+            </div>
 
-          <div className="settings-button-row">
-            <button type="button" className="secondary-button" onClick={createCustomSystemPromptProfile}>
-              New custom profile
-            </button>
-            <button type="button" className="secondary-button" onClick={resetSelectedSystemPromptProfile}>
-              Reset profile
-            </button>
-          </div>
+            {selectedSystemPromptProfile && !selectedSystemPromptProfile.isBuiltIn ? (
+              <button type="button" className="danger-button" onClick={deleteSelectedSystemPromptProfile}>
+                Delete custom profile
+              </button>
+            ) : null}
+          </section>
 
-          {selectedSystemPromptProfile && !selectedSystemPromptProfile.isBuiltIn ? (
-            <button type="button" className="danger-button" onClick={deleteSelectedSystemPromptProfile}>
-              Delete custom profile
-            </button>
-          ) : null}
+          <section className="settings-card display-preferences-card">
+            <h3>Display Preferences</h3>
+            <label className="field">
+              <span>Color theme</span>
+              <small>Choose the interface contrast mode used for this browser session.</small>
+              <select
+                value={session.displayPreferences.theme}
+                onChange={(event) =>
+                  updateDisplayPreferences({ theme: event.target.value as DisplayTheme })
+                }
+              >
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Font size</span>
+              <small>Scale chat, controls, and settings text without changing your content.</small>
+              <select
+                value={session.displayPreferences.fontSize}
+                onChange={(event) =>
+                  updateDisplayPreferences({ fontSize: event.target.value as DisplayFontSize })
+                }
+              >
+                <option value="small">Small</option>
+                <option value="medium">Medium</option>
+                <option value="large">Large</option>
+              </select>
+            </label>
+          </section>
         </div>
       </aside>
 
@@ -1007,6 +1146,11 @@ function App() {
                   the settings pane to change response style, formatting rules, or task constraints. The system prompt
                   is prepended to every chat request before the conversation history, selected files, and your current
                   prompt.
+                </p>
+                <p>
+                  Use <strong>Display Preferences</strong> to switch between dark and light themes or scale the
+                  interface font size. These preferences are stored locally in the browser with the rest of your
+                  session.
                 </p>
                 <p>
                   System prompt profiles let you switch quickly between common modes such as generic assistance,

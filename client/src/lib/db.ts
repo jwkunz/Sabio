@@ -15,6 +15,10 @@ const defaultSession: SessionState = {
     left: 22,
     center: 52,
     right: 26
+  },
+  displayPreferences: {
+    theme: "dark",
+    fontSize: "medium"
   }
 };
 
@@ -46,6 +50,7 @@ export const loadSession = async () => {
     ...defaultSession,
     ...stored,
     paneWidths: stored?.paneWidths ?? defaultSession.paneWidths,
+    displayPreferences: stored?.displayPreferences ?? defaultSession.displayPreferences,
     selectedSystemPromptProfileId: stored?.selectedSystemPromptProfileId ?? "generic"
   };
 };

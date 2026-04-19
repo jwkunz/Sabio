@@ -24,12 +24,21 @@ export interface PaneWidths {
   right: number;
 }
 
+export type DisplayTheme = "dark" | "light";
+export type DisplayFontSize = "small" | "medium" | "large";
+
+export interface DisplayPreferences {
+  theme: DisplayTheme;
+  fontSize: DisplayFontSize;
+}
+
 export interface SessionState {
   selectedModel: string;
   systemPrompt: string;
   selectedSystemPromptProfileId: string;
   draftInput: string;
   paneWidths: PaneWidths;
+  displayPreferences: DisplayPreferences;
 }
 
 export interface SystemPromptProfile {
