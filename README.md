@@ -20,7 +20,7 @@ You can download the latest release from the [releases page](https://github.com/
 To build Sabio from source, follow these steps:
 1. Clone the repository: `git clone https://github.com/jwkunz/Sabio.git`
 2. Navigate into the cloned directory: `cd Sabio`
-3. Run `scripts/build.sh`
+3. Run `build.sh`
 
 ## Prerequisites
 - Node.js (>= 14.x)
