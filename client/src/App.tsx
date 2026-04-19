@@ -9,6 +9,7 @@ import logoUrl from "../../assets/Sabio_logo.png";
 import versionText from "../../VERSION?raw";
 import {
   clearMessages,
+  builtInSystemPromptProfiles,
   loadFiles,
   loadMessages,
   loadSession,
@@ -128,6 +129,14 @@ function App() {
     };
 
     hydrate().catch(() => {
+      const profiles = builtInSystemPromptProfiles();
+      const generic = profiles.find((profile) => profile.id === "generic");
+      setSystemPromptProfiles(profiles);
+      setSession((current) => ({
+        ...current,
+        selectedSystemPromptProfileId: generic?.id ?? "generic",
+        systemPrompt: current.systemPrompt || generic?.content || DEFAULT_SYSTEM_PROMPT
+      }));
       setError("Unable to load local session data.");
       setStatus("");
       setIsHydrated(true);
@@ -911,6 +920,7 @@ function App() {
               value={session.selectedSystemPromptProfileId}
               onChange={(event) => updateSelectedSystemPromptProfile(event.target.value)}
             >
+              {systemPromptProfiles.length === 0 ? <option value="generic">Generic</option> : null}
               {systemPromptProfiles.map((profile) => (
                 <option key={profile.id} value={profile.id}>
                   {profile.name}

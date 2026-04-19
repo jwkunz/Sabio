@@ -94,7 +94,7 @@ export const clearMessages = async () => {
   await db.clear("messages");
 };
 
-const builtInProfiles = (): SystemPromptProfile[] =>
+export const builtInSystemPromptProfiles = (): SystemPromptProfile[] =>
   BUILT_IN_SYSTEM_PROMPT_PROFILES.map((profile) => ({
     ...profile,
     isBuiltIn: true,
@@ -106,7 +106,7 @@ export const loadSystemPromptProfiles = async () => {
   const stored = (await db.getAll("systemPromptProfiles")) as SystemPromptProfile[];
   const byId = new Map<string, SystemPromptProfile>();
 
-  for (const profile of builtInProfiles()) {
+  for (const profile of builtInSystemPromptProfiles()) {
     byId.set(profile.id, profile);
   }
 

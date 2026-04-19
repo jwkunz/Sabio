@@ -304,6 +304,11 @@ button:hover {
   padding: 0.95rem 1rem;
 }
 
+.field select option {
+  background: #ffffff;
+  color: #111318;
+}
+
 .composer textarea {
   min-height: 124px;
   resize: vertical;
