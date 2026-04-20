@@ -19,7 +19,7 @@ Sabio is a local-first Ollama workspace with:
 1. Install dependencies:
 
 ```bash
-npm install
+npm ci --include=dev
 ```
 
 2. Start the app:
@@ -74,6 +74,7 @@ The release archives contain the production frontend build and a platform-specif
 ## Build
 
 ```bash
+npm ci --include=dev
 npm run build
 ```
 
@@ -82,6 +83,10 @@ To create a clean runnable distribution folder with the Rust executable and buil
 ```bash
 ./build.sh
 ```
+
+`build.sh` checks for required Node build dependencies such as TypeScript, Vite, and `@types/node`. If they are
+missing, it runs `npm ci --include=dev` before building. Avoid production-only dependency installs such as
+`npm install --omit=dev` when building from source because the TypeScript check requires development type packages.
 
 This recreates `dist/` and stages:
 

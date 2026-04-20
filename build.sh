@@ -10,8 +10,19 @@ if [[ "${OS:-}" == "Windows_NT" ]]; then
   BINARY_NAME="sabio-server.exe"
 fi
 
+ensure_node_build_dependencies() {
+  if [[ -x node_modules/.bin/tsc && -x node_modules/.bin/vite && -d node_modules/@types/node ]]; then
+    return
+  fi
+
+  echo "Installing Node build dependencies..."
+  npm ci --include=dev
+}
+
 echo "Cleaning dist..."
 rm -rf dist
+
+ensure_node_build_dependencies
 
 echo "Building frontend and Rust backend..."
 npm run check
