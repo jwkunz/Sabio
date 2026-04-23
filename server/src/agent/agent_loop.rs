@@ -15,6 +15,8 @@ use super::{
     },
 };
 
+const MAX_STEP_ATTEMPTS: usize = 3;
+
 #[derive(Debug, Deserialize)]
 struct OllamaGenerateResponse {
     response: Option<String>,
@@ -76,12 +78,14 @@ pub async fn run_approved_plan(
         )
         .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
 
-        let action = match request_step_action(
+        let action = match run_step_with_retries(
             client,
             ollama_base_url,
             model,
+            session_id,
             &session,
             &plan,
+            &step.id,
             &step.title,
             &step.detail,
         )
@@ -98,78 +102,6 @@ pub async fn run_approved_plan(
                 return Err(error);
             }
         };
-
-        if !is_agent_loop_tool(&action.tool) {
-            let _ = storage::update_plan_step_status(
-                session_id,
-                &plan.id,
-                &step.id,
-                AgentPlanStepStatus::Failed,
-            );
-            return Err(agent_error(
-                StatusCode::BAD_GATEWAY,
-                "Model requested a tool that is not available in the approved plan loop.",
-            ));
-        }
-
-        let _ = storage::append_event(
-            session_id,
-            AgentEventType::ToolStarted,
-            json!({
-                "tool": action.tool,
-                "args": action.args,
-                "stepId": step.id,
-                "note": action.note,
-            }),
-        )
-        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
-
-        let is_write_action = is_write_tool(&action.tool);
-        let output = execute_step_tool(ToolExecutionRequest {
-            workspace_path: session.workspace_path.clone(),
-            tool: action.tool.clone(),
-            args: action.args.clone(),
-        });
-        let output_ok = output.ok;
-
-        let _ = storage::append_event(
-            session_id,
-            AgentEventType::ToolFinished,
-            json!({
-                "tool": output.tool,
-                "ok": output.ok,
-                "payload": output.payload,
-                "errors": output.errors,
-                "stepId": step.id,
-            }),
-        )
-        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
-
-        if output_ok && is_write_action {
-            let _ = storage::append_event(
-                session_id,
-                AgentEventType::PatchCreated,
-                json!({
-                    "tool": output.tool,
-                    "payload": output.payload,
-                    "stepId": step.id,
-                }),
-            )
-            .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
-        }
-
-        if !output_ok {
-            let _ = storage::update_plan_step_status(
-                session_id,
-                &plan.id,
-                &step.id,
-                AgentPlanStepStatus::Failed,
-            );
-            return Err(agent_error(
-                StatusCode::BAD_REQUEST,
-                "Tool execution failed during plan run.",
-            ));
-        }
 
         let note = action
             .note
@@ -350,6 +282,147 @@ Step detail: {}
         .map_err(|error| agent_error(StatusCode::BAD_GATEWAY, error.to_string()))
 }
 
+async fn run_step_with_retries(
+    client: &Client,
+    ollama_base_url: &str,
+    model: &str,
+    session_id: &str,
+    session: &AgentSessionRecord,
+    plan: &AgentPlan,
+    step_id: &str,
+    step_title: &str,
+    step_detail: &str,
+) -> Result<ModelStepAction, (StatusCode, Json<AgentApiError>)> {
+    let mut last_diagnostic = String::new();
+
+    for attempt in 1..=MAX_STEP_ATTEMPTS {
+        let action = match request_step_action(
+            client,
+            ollama_base_url,
+            model,
+            session,
+            plan,
+            step_title,
+            step_detail,
+        )
+        .await
+        {
+            Ok(action) => action,
+            Err(error) => {
+                last_diagnostic = error.1.detail.clone();
+                if attempt < MAX_STEP_ATTEMPTS {
+                    emit_retry_event(
+                        session_id,
+                        step_id,
+                        attempt,
+                        "model_action",
+                        &last_diagnostic,
+                    )?;
+                    continue;
+                }
+
+                emit_abort_event(session_id, step_id, attempt, &last_diagnostic)?;
+                return Err(error);
+            }
+        };
+
+        if !is_agent_loop_tool(&action.tool) {
+            last_diagnostic = format!(
+                "Model requested unavailable tool '{}'.",
+                serde_json::to_string(&action.tool).unwrap_or_else(|_| "unknown".to_string())
+            );
+            if attempt < MAX_STEP_ATTEMPTS {
+                emit_retry_event(
+                    session_id,
+                    step_id,
+                    attempt,
+                    "unavailable_tool",
+                    &last_diagnostic,
+                )?;
+                continue;
+            }
+
+            emit_abort_event(session_id, step_id, attempt, &last_diagnostic)?;
+            return Err(agent_error(StatusCode::BAD_GATEWAY, last_diagnostic));
+        }
+
+        let _ = storage::append_event(
+            session_id,
+            AgentEventType::ToolStarted,
+            json!({
+                "tool": action.tool,
+                "args": action.args,
+                "stepId": step_id,
+                "attempt": attempt,
+                "note": action.note,
+            }),
+        )
+        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
+
+        let is_write_action = is_write_tool(&action.tool);
+        let output = execute_step_tool(ToolExecutionRequest {
+            workspace_path: session.workspace_path.clone(),
+            tool: action.tool.clone(),
+            args: action.args.clone(),
+        });
+        let output_ok = output.ok;
+
+        let _ = storage::append_event(
+            session_id,
+            AgentEventType::ToolFinished,
+            json!({
+                "tool": output.tool,
+                "ok": output.ok,
+                "payload": output.payload,
+                "errors": output.errors,
+                "stepId": step_id,
+                "attempt": attempt,
+            }),
+        )
+        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
+
+        if output_ok && is_write_action {
+            let _ = storage::append_event(
+                session_id,
+                AgentEventType::PatchCreated,
+                json!({
+                    "tool": output.tool,
+                    "payload": output.payload,
+                    "stepId": step_id,
+                    "attempt": attempt,
+                }),
+            )
+            .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
+        }
+
+        if output_ok {
+            return Ok(action);
+        }
+
+        last_diagnostic = output.errors.join("; ");
+        if attempt < MAX_STEP_ATTEMPTS {
+            emit_retry_event(
+                session_id,
+                step_id,
+                attempt,
+                "tool_failure",
+                &last_diagnostic,
+            )?;
+            continue;
+        }
+    }
+
+    emit_abort_event(session_id, step_id, MAX_STEP_ATTEMPTS, &last_diagnostic)?;
+    Err(agent_error(
+        StatusCode::BAD_REQUEST,
+        if last_diagnostic.is_empty() {
+            "No progress after repeated step attempts.".to_string()
+        } else {
+            format!("No progress after repeated step attempts: {last_diagnostic}")
+        },
+    ))
+}
+
 fn ensure_plan_approved(
     session: &AgentSessionRecord,
     plan: &AgentPlan,
@@ -454,6 +527,53 @@ fn step_commit_message(step_title: &str) -> String {
     let title: String = title.chars().take(80).collect();
 
     format!("sabio(agent): {title}")
+}
+
+fn emit_retry_event(
+    session_id: &str,
+    step_id: &str,
+    attempt: usize,
+    reason: &str,
+    diagnostic: &str,
+) -> Result<(), (StatusCode, Json<AgentApiError>)> {
+    let _ = storage::append_event(
+        session_id,
+        AgentEventType::Error,
+        json!({
+            "message": "Retrying plan step after recoverable failure.",
+            "stepId": step_id,
+            "attempt": attempt,
+            "nextAttempt": attempt + 1,
+            "maxAttempts": MAX_STEP_ATTEMPTS,
+            "reason": reason,
+            "diagnostic": diagnostic,
+        }),
+    )
+    .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
+
+    Ok(())
+}
+
+fn emit_abort_event(
+    session_id: &str,
+    step_id: &str,
+    attempt: usize,
+    diagnostic: &str,
+) -> Result<(), (StatusCode, Json<AgentApiError>)> {
+    let _ = storage::append_event(
+        session_id,
+        AgentEventType::Error,
+        json!({
+            "message": "Aborting plan step after repeated failures.",
+            "stepId": step_id,
+            "attempt": attempt,
+            "maxAttempts": MAX_STEP_ATTEMPTS,
+            "diagnostic": diagnostic,
+        }),
+    )
+    .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
+
+    Ok(())
 }
 
 fn extract_json_object(raw: &str) -> Option<String> {
