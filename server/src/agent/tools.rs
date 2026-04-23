@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::Write,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     time::Duration,
@@ -17,6 +18,8 @@ const MAX_SEARCH_FILE_BYTES: u64 = 512 * 1024;
 const DEFAULT_COMMAND_TIMEOUT_SECONDS: u64 = 30;
 const MAX_COMMAND_TIMEOUT_SECONDS: u64 = 300;
 const MAX_COMMAND_OUTPUT_CHARS: usize = 80_000;
+const MAX_WRITE_BYTES: usize = 512 * 1024;
+const MAX_PATCH_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -234,6 +237,64 @@ pub fn execute_read_only_tool(request: ToolExecutionRequest) -> ToolExecutionRes
         | AgentToolName::RunCommand
         | AgentToolName::GitCommit => {
             Err("Tool is not available in read-only execution mode.".to_string())
+        }
+    };
+
+    match result {
+        Ok(payload) => ToolExecutionResponse {
+            ok: true,
+            tool: request.tool,
+            payload,
+            errors: Vec::new(),
+        },
+        Err(error) => ToolExecutionResponse {
+            ok: false,
+            tool: request.tool,
+            payload: json!({}),
+            errors: vec![error],
+        },
+    }
+}
+
+pub fn execute_write_tool(request: ToolExecutionRequest) -> ToolExecutionResponse {
+    let validation = validate_tool_call(ToolCallValidationRequest {
+        tool: request.tool.clone(),
+        args: request.args.clone(),
+    });
+
+    if !validation.valid {
+        return ToolExecutionResponse {
+            ok: false,
+            tool: request.tool,
+            payload: json!({}),
+            errors: validation.errors,
+        };
+    }
+
+    let workspace_root = match canonical_workspace_root(&request.workspace_path) {
+        Ok(path) => path,
+        Err(error) => {
+            return ToolExecutionResponse {
+                ok: false,
+                tool: request.tool,
+                payload: json!({}),
+                errors: vec![error],
+            };
+        }
+    };
+
+    let result = match request.tool {
+        AgentToolName::WriteFile => execute_write_file(&workspace_root, &request.args),
+        AgentToolName::ApplyPatch => execute_apply_patch(&workspace_root, &request.args),
+        AgentToolName::ListFiles
+        | AgentToolName::ReadFile
+        | AgentToolName::SearchText
+        | AgentToolName::GitStatus
+        | AgentToolName::GitDiff => {
+            Err("Use the read-only execution endpoint for this tool.".to_string())
+        }
+        AgentToolName::RunCommand | AgentToolName::GitCommit => {
+            Err("Tool is not available in write execution mode.".to_string())
         }
     };
 
@@ -516,6 +577,98 @@ fn execute_read_file(workspace_root: &Path, args: &Value) -> Result<Value, Strin
     }))
 }
 
+fn execute_write_file(workspace_root: &Path, args: &Value) -> Result<Value, String> {
+    let path = require_arg(args, "path")?;
+    let content = require_arg(args, "content")?;
+
+    if content.len() > MAX_WRITE_BYTES {
+        return Err(format!(
+            "Content is too large to write through this tool: {} bytes.",
+            content.len()
+        ));
+    }
+
+    let target = contained_writable_path(workspace_root, path)?;
+    let existed = target.exists();
+    let previous_content = if existed {
+        Some(
+            fs::read_to_string(&target)
+                .map_err(|error| format!("Unable to read existing file as UTF-8 text: {error}"))?,
+        )
+    } else {
+        None
+    };
+
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+
+    fs::write(&target, content).map_err(|error| error.to_string())?;
+
+    Ok(json!({
+        "path": target.strip_prefix(workspace_root).unwrap_or(&target).to_string_lossy(),
+        "created": !existed,
+        "previousSize": previous_content.as_ref().map(|value| value.len()),
+        "newSize": content.len(),
+    }))
+}
+
+fn execute_apply_patch(workspace_root: &Path, args: &Value) -> Result<Value, String> {
+    let patch = require_arg(args, "patch")?;
+
+    if patch.len() > MAX_PATCH_BYTES {
+        return Err(format!(
+            "Patch is too large to apply through this tool: {} bytes.",
+            patch.len()
+        ));
+    }
+
+    if patch_contains_absolute_or_parent_path(patch) {
+        return Err("Patch contains an absolute path or parent directory component.".to_string());
+    }
+
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(workspace_root)
+        .arg("apply")
+        .arg("--whitespace=nowarn")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| "Unable to open git apply stdin.".to_string())?;
+        stdin
+            .write_all(patch.as_bytes())
+            .map_err(|error| error.to_string())?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|error| error.to_string())?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "Patch failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    let diff = execute_git(workspace_root, &["diff", "--no-ext-diff"])?;
+
+    Ok(json!({
+        "applied": true,
+        "stdout": String::from_utf8_lossy(&output.stdout),
+        "stderr": String::from_utf8_lossy(&output.stderr),
+        "diff": diff,
+    }))
+}
+
 fn execute_search_text(workspace_root: &Path, args: &Value) -> Result<Value, String> {
     let pattern = require_arg(args, "pattern")?;
     let path = args
@@ -631,6 +784,61 @@ fn contained_existing_path(workspace_root: &Path, path: &str) -> Result<PathBuf,
     Ok(canonical)
 }
 
+fn contained_writable_path(workspace_root: &Path, path: &str) -> Result<PathBuf, String> {
+    let requested = requested_path(workspace_root, path)?;
+    let parent = requested
+        .parent()
+        .ok_or_else(|| "Writable path must have a parent directory.".to_string())?;
+    let parent = if parent.exists() {
+        parent
+            .canonicalize()
+            .map_err(|error| format!("Unable to resolve parent path: {error}"))?
+    } else {
+        let ancestor = nearest_existing_ancestor(parent)?;
+        let canonical_ancestor = ancestor
+            .canonicalize()
+            .map_err(|error| format!("Unable to resolve ancestor path: {error}"))?;
+
+        if !canonical_ancestor.starts_with(workspace_root) {
+            return Err("Path escapes the trusted workspace.".to_string());
+        }
+
+        parent.to_path_buf()
+    };
+
+    if !parent.starts_with(workspace_root) {
+        return Err("Path escapes the trusted workspace.".to_string());
+    }
+
+    if requested.exists() {
+        let canonical = requested
+            .canonicalize()
+            .map_err(|error| format!("Unable to resolve writable path: {error}"))?;
+
+        if !canonical.starts_with(workspace_root) {
+            return Err("Path escapes the trusted workspace.".to_string());
+        }
+
+        return Ok(canonical);
+    }
+
+    Ok(requested)
+}
+
+fn nearest_existing_ancestor(path: &Path) -> Result<PathBuf, String> {
+    let mut current = path;
+
+    loop {
+        if current.exists() {
+            return Ok(current.to_path_buf());
+        }
+
+        current = current
+            .parent()
+            .ok_or_else(|| "Unable to find existing ancestor for writable path.".to_string())?;
+    }
+}
+
 fn requested_path(workspace_root: &Path, path: &str) -> Result<PathBuf, String> {
     let requested = Path::new(path);
 
@@ -660,6 +868,21 @@ fn should_skip_path(path: &Path) -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+fn patch_contains_absolute_or_parent_path(patch: &str) -> bool {
+    patch.lines().any(|line| {
+        let path = line
+            .strip_prefix("+++ ")
+            .or_else(|| line.strip_prefix("--- "))
+            .or_else(|| line.strip_prefix("diff --git "))
+            .unwrap_or_default();
+
+        path.split_whitespace().any(|part| {
+            let normalized = part.trim_start_matches("a/").trim_start_matches("b/");
+            normalized.starts_with('/') || normalized.split('/').any(|component| component == "..")
+        })
+    })
 }
 
 fn require_arg<'a>(args: &'a Value, name: &str) -> Result<&'a str, String> {

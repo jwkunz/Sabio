@@ -1827,6 +1827,7 @@ function App() {
                 <span>Workspace-contained cwd required</span>
                 <span>Network and destructive commands require approval</span>
                 <span>Shell and privileged commands are blocked</span>
+                <span>Patch and file writes are logged as diff events</span>
               </div>
             </section>
             <section className="settings-card">

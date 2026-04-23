@@ -77,7 +77,7 @@ impl AgentSessionRecord {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentEvent {
     pub id: String,
@@ -89,7 +89,7 @@ pub struct AgentEvent {
     pub parent_event_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentEventType {
     SessionStarted,
@@ -247,6 +247,13 @@ pub struct CreatePlanRequest {
 pub struct CreatePlanStepRequest {
     pub title: String,
     pub detail: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecuteWriteToolRequest {
+    pub tool: String,
+    pub args: Value,
 }
 
 #[derive(Debug, Deserialize)]

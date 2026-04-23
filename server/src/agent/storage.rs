@@ -81,7 +81,7 @@ pub fn create_session(
     let event_workspace_path = session.workspace_path.clone();
     let event_git_branch = session.git_branch.clone();
 
-    push_event(
+    let _ = push_event(
         &mut session,
         AgentEventType::SessionStarted,
         json!({
@@ -90,7 +90,7 @@ pub fn create_session(
             "gitBranch": event_git_branch,
         }),
         None,
-    );
+    )?;
     write_session(&session)?;
     Ok(session)
 }
@@ -136,12 +136,12 @@ pub fn create_approval(
 
     let event_payload = serde_json::to_value(&approval).map_err(|error| error.to_string())?;
     session.approvals.push(approval.clone());
-    push_event(
+    let _ = push_event(
         &mut session,
         AgentEventType::ApprovalRequested,
         event_payload,
         None,
-    );
+    )?;
     write_session(&session)?;
     Ok(approval)
 }
@@ -181,12 +181,12 @@ pub fn resolve_approval(
     let resolved = resolved.ok_or_else(|| "Approval not found.".to_string())?;
     let event_payload = serde_json::to_value(&resolved).map_err(|error| error.to_string())?;
 
-    push_event(
+    let _ = push_event(
         &mut session,
         AgentEventType::ApprovalResolved,
         event_payload,
         None,
-    );
+    )?;
     write_session(&session)?;
     Ok(resolved)
 }
@@ -250,24 +250,35 @@ pub fn create_plan(
     let approval_payload = serde_json::to_value(&approval).map_err(|error| error.to_string())?;
     session.plans.push(plan.clone());
     session.approvals.push(approval);
-    push_event(
+    let _ = push_event(
         &mut session,
         AgentEventType::PlanCreated,
         plan_payload,
         None,
-    );
-    push_event(
+    )?;
+    let _ = push_event(
         &mut session,
         AgentEventType::ApprovalRequested,
         approval_payload,
         None,
-    );
+    )?;
     write_session(&session)?;
     Ok(plan)
 }
 
 pub fn list_plans(session_id: &str) -> Result<Vec<AgentPlan>, String> {
     Ok(get_session(session_id)?.plans)
+}
+
+pub fn append_event(
+    session_id: &str,
+    event_type: AgentEventType,
+    payload: serde_json::Value,
+) -> Result<AgentEvent, String> {
+    let mut session = get_session(session_id)?;
+    let event = push_event(&mut session, event_type, payload, None)?;
+    write_session(&session)?;
+    Ok(event)
 }
 
 pub fn write_session(session: &AgentSessionRecord) -> Result<(), String> {
@@ -283,18 +294,19 @@ fn push_event(
     event_type: AgentEventType,
     payload: serde_json::Value,
     parent_event_id: Option<String>,
-) {
+) -> Result<AgentEvent, String> {
     let payload = capped_payload(payload);
     let now = Utc::now().timestamp_millis();
-
-    session.event_log.push(AgentEvent {
+    let event = AgentEvent {
         id: Uuid::new_v4().to_string(),
         session_id: session.id.clone(),
         timestamp: now,
         event_type,
         payload,
         parent_event_id,
-    });
+    };
+
+    session.event_log.push(event.clone());
 
     if session.event_log.len() > MAX_EVENTS_PER_SESSION {
         let overflow = session.event_log.len() - MAX_EVENTS_PER_SESSION;
@@ -302,6 +314,7 @@ fn push_event(
     }
 
     session.updated_at = now;
+    Ok(event)
 }
 
 fn capped_payload(payload: serde_json::Value) -> serde_json::Value {

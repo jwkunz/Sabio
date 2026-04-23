@@ -17,16 +17,16 @@ use serde_json::json;
 
 use super::storage;
 use super::tools::{
-    execute_command, execute_read_only_tool, preview_command, tool_specs, validate_tool_call,
-    CommandClassification, CommandExecutionRequest, ToolCallValidationRequest,
-    ToolExecutionRequest,
+    execute_command, execute_read_only_tool, execute_write_tool, preview_command, tool_specs,
+    validate_tool_call, AgentToolName, CommandClassification, CommandExecutionRequest,
+    ToolCallValidationRequest, ToolExecutionRequest,
 };
 use super::types::{
     AgentApiError, AgentApprovalKind, AgentApprovalsResponse, AgentCapability, AgentEventsResponse,
     AgentHealthResponse, AgentPlansResponse, AgentRouteStatus, AgentSessionRecord,
     AgentSessionSummary, AgentWorkspaceStatus, CreatePlanRequest, CreateSessionRequest,
-    ListSessionsQuery, RenameSessionRequest, ResolveApprovalRequest, ValidateWorkspaceRequest,
-    ValidateWorkspaceResponse,
+    ExecuteWriteToolRequest, ListSessionsQuery, RenameSessionRequest, ResolveApprovalRequest,
+    ValidateWorkspaceRequest, ValidateWorkspaceResponse,
 };
 
 pub fn router<S>() -> Router<S>
@@ -55,6 +55,10 @@ where
         .route(
             "/sessions/:session_id/plans",
             get(session_plans).post(create_plan),
+        )
+        .route(
+            "/sessions/:session_id/tools/execute-write",
+            post(execute_write_tool_route),
         )
         .route(
             "/sessions/:session_id/approvals/command",
@@ -104,6 +108,35 @@ async fn execute_read_only_tool_route(
     Json(request): Json<ToolExecutionRequest>,
 ) -> Json<super::tools::ToolExecutionResponse> {
     Json(execute_read_only_tool(request))
+}
+
+async fn execute_write_tool_route(
+    AxumPath(session_id): AxumPath<String>,
+    Json(request): Json<ExecuteWriteToolRequest>,
+) -> Result<Json<super::tools::ToolExecutionResponse>, (StatusCode, Json<AgentApiError>)> {
+    let session = storage::get_session(&session_id)
+        .map_err(|error| agent_error(StatusCode::NOT_FOUND, error))?;
+    let tool = serde_json::from_value::<AgentToolName>(json!(request.tool))
+        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error.to_string()))?;
+    let response = execute_write_tool(ToolExecutionRequest {
+        workspace_path: session.workspace_path.clone(),
+        tool,
+        args: request.args,
+    });
+
+    if response.ok {
+        let _ = storage::append_event(
+            &session_id,
+            super::types::AgentEventType::PatchCreated,
+            json!({
+                "tool": response.tool,
+                "payload": response.payload,
+            }),
+        )
+        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
+    }
+
+    Ok(Json(response))
 }
 
 async fn execute_command_route(
