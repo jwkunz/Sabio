@@ -126,3 +126,20 @@ export interface AgentApproval {
   detail: string;
   payload: Record<string, unknown>;
 }
+
+export interface AgentPlan {
+  id: string;
+  sessionId: string;
+  createdAt: number;
+  title: string;
+  summary: string;
+  steps: AgentPlanStep[];
+  approvalId?: string | null;
+}
+
+export interface AgentPlanStep {
+  id: string;
+  title: string;
+  detail: string;
+  status: string;
+}

@@ -60,6 +60,8 @@ pub struct AgentSessionRecord {
     pub event_log: Vec<AgentEvent>,
     #[serde(default)]
     pub approvals: Vec<AgentApproval>,
+    #[serde(default)]
+    pub plans: Vec<AgentPlan>,
 }
 
 impl AgentSessionRecord {
@@ -136,6 +138,36 @@ pub enum AgentApprovalStatus {
     Rejected,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPlan {
+    pub id: String,
+    pub session_id: String,
+    pub created_at: i64,
+    pub title: String,
+    pub summary: String,
+    pub steps: Vec<AgentPlanStep>,
+    pub approval_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPlanStep {
+    pub id: String,
+    pub title: String,
+    pub detail: String,
+    pub status: AgentPlanStepStatus,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPlanStepStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentWorkspaceStatus {
@@ -194,6 +226,27 @@ pub struct AgentEventsResponse {
 #[serde(rename_all = "camelCase")]
 pub struct AgentApprovalsResponse {
     pub approvals: Vec<AgentApproval>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPlansResponse {
+    pub plans: Vec<AgentPlan>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePlanRequest {
+    pub title: String,
+    pub summary: String,
+    pub steps: Vec<CreatePlanStepRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePlanStepRequest {
+    pub title: String,
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

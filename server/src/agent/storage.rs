@@ -8,8 +8,8 @@ use serde_json::json;
 use uuid::Uuid;
 
 use super::types::{
-    AgentApproval, AgentApprovalKind, AgentApprovalStatus, AgentEvent, AgentEventType,
-    AgentSessionRecord,
+    AgentApproval, AgentApprovalKind, AgentApprovalStatus, AgentEvent, AgentEventType, AgentPlan,
+    AgentPlanStep, AgentPlanStepStatus, AgentSessionRecord,
 };
 
 const MAX_EVENTS_PER_SESSION: usize = 500;
@@ -75,6 +75,7 @@ pub fn create_session(
         preferred_commands: Vec::new(),
         event_log: Vec::new(),
         approvals: Vec::new(),
+        plans: Vec::new(),
     };
 
     let event_workspace_path = session.workspace_path.clone();
@@ -188,6 +189,85 @@ pub fn resolve_approval(
     );
     write_session(&session)?;
     Ok(resolved)
+}
+
+pub fn create_plan(
+    session_id: &str,
+    title: String,
+    summary: String,
+    steps: Vec<(String, String)>,
+) -> Result<AgentPlan, String> {
+    let mut session = get_session(session_id)?;
+    let title = title.trim();
+    let summary = summary.trim();
+
+    if title.is_empty() {
+        return Err("Plan title cannot be empty.".to_string());
+    }
+
+    if steps.is_empty() {
+        return Err("Plan must include at least one step.".to_string());
+    }
+
+    let now = Utc::now().timestamp_millis();
+    let plan = AgentPlan {
+        id: Uuid::new_v4().to_string(),
+        session_id: session.id.clone(),
+        created_at: now,
+        title: title.to_string(),
+        summary: summary.to_string(),
+        steps: steps
+            .into_iter()
+            .map(|(title, detail)| AgentPlanStep {
+                id: Uuid::new_v4().to_string(),
+                title,
+                detail,
+                status: AgentPlanStepStatus::Pending,
+            })
+            .collect(),
+        approval_id: None,
+    };
+
+    let approval = AgentApproval {
+        id: Uuid::new_v4().to_string(),
+        session_id: session.id.clone(),
+        created_at: now,
+        resolved_at: None,
+        kind: AgentApprovalKind::Plan,
+        status: AgentApprovalStatus::Pending,
+        title: format!("Approve plan: {}", plan.title),
+        detail: if plan.summary.is_empty() {
+            "Plan requires approval before execution.".to_string()
+        } else {
+            plan.summary.clone()
+        },
+        payload: serde_json::to_value(&plan).map_err(|error| error.to_string())?,
+    };
+    let mut plan = plan;
+    plan.approval_id = Some(approval.id.clone());
+
+    let plan_payload = serde_json::to_value(&plan).map_err(|error| error.to_string())?;
+    let approval_payload = serde_json::to_value(&approval).map_err(|error| error.to_string())?;
+    session.plans.push(plan.clone());
+    session.approvals.push(approval);
+    push_event(
+        &mut session,
+        AgentEventType::PlanCreated,
+        plan_payload,
+        None,
+    );
+    push_event(
+        &mut session,
+        AgentEventType::ApprovalRequested,
+        approval_payload,
+        None,
+    );
+    write_session(&session)?;
+    Ok(plan)
+}
+
+pub fn list_plans(session_id: &str) -> Result<Vec<AgentPlan>, String> {
+    Ok(get_session(session_id)?.plans)
 }
 
 pub fn write_session(session: &AgentSessionRecord) -> Result<(), String> {

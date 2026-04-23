@@ -30,6 +30,7 @@ import type {
   AppMode,
   AgentApproval,
   AgentEvent,
+  AgentPlan,
   AgentSessionSummary,
   AgentToolSpec,
   DisplayFontSize,
@@ -129,6 +130,7 @@ function App() {
   const [agentSessionStatus, setAgentSessionStatus] = useState("");
   const [agentTools, setAgentTools] = useState<AgentToolSpec[]>([]);
   const [agentApprovals, setAgentApprovals] = useState<AgentApproval[]>([]);
+  const [agentPlans, setAgentPlans] = useState<AgentPlan[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ startX: number; widths: PaneWidths; handle: "left" | "right" } | null>(null);
@@ -302,11 +304,13 @@ function App() {
     if (!selectedAgentSessionId) {
       setAgentEvents([]);
       setAgentApprovals([]);
+      setAgentPlans([]);
       return;
     }
 
     void loadAgentEvents(selectedAgentSessionId);
     void loadAgentApprovals(selectedAgentSessionId);
+    void loadAgentPlans(selectedAgentSessionId);
   }, [selectedAgentSessionId]);
 
   useEffect(() => {
@@ -838,6 +842,70 @@ function App() {
     }
   };
 
+  const loadAgentPlans = async (sessionId: string) => {
+    try {
+      const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/plans`);
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Unable to load plans.");
+      }
+
+      const payload = (await response.json()) as { plans: AgentPlan[] };
+      setAgentPlans(payload.plans);
+    } catch (planError) {
+      setAgentSessionStatus((planError as Error).message || "Unable to load plans.");
+    }
+  };
+
+  const createStarterPlan = async () => {
+    if (!selectedAgentSessionId) {
+      setAgentSessionStatus("Select or trust a session before creating a plan.");
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/agent/sessions/${encodeURIComponent(selectedAgentSessionId)}/plans`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          title: "Starter implementation plan",
+          summary: "A placeholder plan used to verify plan approval flow before model generation is enabled.",
+          steps: [
+            {
+              title: "Inspect workspace",
+              detail: "Use read-only tools to understand the project shape."
+            },
+            {
+              title: "Propose changes",
+              detail: "Prepare patch-oriented changes for user-visible review."
+            },
+            {
+              title: "Verify and summarize",
+              detail: "Run safe checks, summarize results, and identify remaining risks."
+            }
+          ]
+        })
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Unable to create plan.");
+      }
+
+      await Promise.all([
+        loadAgentPlans(selectedAgentSessionId),
+        loadAgentApprovals(selectedAgentSessionId),
+        loadAgentEvents(selectedAgentSessionId)
+      ]);
+      setAgentSessionStatus("Plan created and queued for approval.");
+    } catch (planError) {
+      setAgentSessionStatus((planError as Error).message || "Unable to create plan.");
+    }
+  };
+
   const resolveAgentApproval = async (approvalId: string, approved: boolean) => {
     if (!selectedAgentSessionId) {
       return;
@@ -864,6 +932,7 @@ function App() {
 
       await Promise.all([
         loadAgentApprovals(selectedAgentSessionId),
+        loadAgentPlans(selectedAgentSessionId),
         loadAgentEvents(selectedAgentSessionId)
       ]);
       setAgentSessionStatus(approved ? "Approval accepted." : "Approval rejected.");
@@ -1432,6 +1501,32 @@ function App() {
                 <p>{agentSessionStatus}</p>
               </article>
             ) : null}
+            {agentPlans.length > 0 ? (
+              <section className="agent-plan-stack">
+                {agentPlans.map((plan) => {
+                  const approval = agentApprovals.find((entry) => entry.id === plan.approvalId);
+
+                  return (
+                    <article className="agent-plan-card" key={plan.id}>
+                      <div className="message-meta">
+                        <span>Plan</span>
+                        <span>{approval ? formatAgentEventType(approval.status) : "No approval"}</span>
+                      </div>
+                      <h3>{plan.title}</h3>
+                      {plan.summary ? <p>{plan.summary}</p> : null}
+                      <ol>
+                        {plan.steps.map((step) => (
+                          <li key={step.id}>
+                            <strong>{step.title}</strong>
+                            {step.detail ? <span>{step.detail}</span> : null}
+                          </li>
+                        ))}
+                      </ol>
+                    </article>
+                  );
+                })}
+              </section>
+            ) : null}
             {agentEvents.length === 0 ? (
               <article className="agent-event">
                 <div className="message-meta">
@@ -1516,9 +1611,19 @@ function App() {
                 <span>{session.selectedModel || "No model selected"}</span>
                 <span>{session.agentWorkspace.canonicalPath || "No workspace selected"}</span>
               </div>
-              <button type="button" disabled>
-                Run agent
-              </button>
+              <div>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => void createStarterPlan()}
+                  disabled={!selectedAgentSessionId}
+                >
+                  Create starter plan
+                </button>
+                <button type="button" disabled>
+                  Run agent
+                </button>
+              </div>
             </div>
           </div>
         )}

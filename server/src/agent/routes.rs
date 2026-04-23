@@ -23,9 +23,10 @@ use super::tools::{
 };
 use super::types::{
     AgentApiError, AgentApprovalKind, AgentApprovalsResponse, AgentCapability, AgentEventsResponse,
-    AgentHealthResponse, AgentRouteStatus, AgentSessionRecord, AgentSessionSummary,
-    AgentWorkspaceStatus, CreateSessionRequest, ListSessionsQuery, RenameSessionRequest,
-    ResolveApprovalRequest, ValidateWorkspaceRequest, ValidateWorkspaceResponse,
+    AgentHealthResponse, AgentPlansResponse, AgentRouteStatus, AgentSessionRecord,
+    AgentSessionSummary, AgentWorkspaceStatus, CreatePlanRequest, CreateSessionRequest,
+    ListSessionsQuery, RenameSessionRequest, ResolveApprovalRequest, ValidateWorkspaceRequest,
+    ValidateWorkspaceResponse,
 };
 
 pub fn router<S>() -> Router<S>
@@ -51,6 +52,10 @@ where
             get(session_event_stream),
         )
         .route("/sessions/:session_id/approvals", get(session_approvals))
+        .route(
+            "/sessions/:session_id/plans",
+            get(session_plans).post(create_plan),
+        )
         .route(
             "/sessions/:session_id/approvals/command",
             post(request_command_approval),
@@ -174,6 +179,29 @@ async fn session_approvals(
     storage::list_approvals(&session_id)
         .map(|approvals| Json(AgentApprovalsResponse { approvals }))
         .map_err(|error| agent_error(StatusCode::NOT_FOUND, error))
+}
+
+async fn session_plans(
+    AxumPath(session_id): AxumPath<String>,
+) -> Result<Json<AgentPlansResponse>, (StatusCode, Json<AgentApiError>)> {
+    storage::list_plans(&session_id)
+        .map(|plans| Json(AgentPlansResponse { plans }))
+        .map_err(|error| agent_error(StatusCode::NOT_FOUND, error))
+}
+
+async fn create_plan(
+    AxumPath(session_id): AxumPath<String>,
+    Json(request): Json<CreatePlanRequest>,
+) -> Result<Json<super::types::AgentPlan>, (StatusCode, Json<AgentApiError>)> {
+    let steps = request
+        .steps
+        .into_iter()
+        .map(|step| (step.title, step.detail.unwrap_or_default()))
+        .collect();
+
+    storage::create_plan(&session_id, request.title, request.summary, steps)
+        .map(Json)
+        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))
 }
 
 async fn request_command_approval(
