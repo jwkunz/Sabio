@@ -26,6 +26,7 @@ export interface PaneWidths {
 
 export type DisplayTheme = "dark" | "light";
 export type DisplayFontSize = "small" | "medium" | "large";
+export type AppMode = "chat" | "agent";
 
 export interface DisplayPreferences {
   theme: DisplayTheme;
@@ -33,6 +34,7 @@ export interface DisplayPreferences {
 }
 
 export interface SessionState {
+  appMode: AppMode;
   selectedModel: string;
   systemPrompt: string;
   selectedSystemPromptProfileId: string;

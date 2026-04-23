@@ -27,6 +27,7 @@ import {
 } from "./lib/fileBundle";
 import { normalizeMathDelimiters } from "./lib/markdown";
 import type {
+  AppMode,
   DisplayFontSize,
   DisplayTheme,
   Message,
@@ -80,6 +81,7 @@ function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [session, setSession] = useState<SessionState>({
+    appMode: "chat",
     selectedModel: "",
     systemPrompt: DEFAULT_SYSTEM_PROMPT,
     selectedSystemPromptProfileId: "generic",
@@ -697,6 +699,13 @@ function App() {
     }));
   };
 
+  const updateAppMode = (appMode: AppMode) => {
+    setSession((current) => ({
+      ...current,
+      appMode
+    }));
+  };
+
   const startResize = (handle: "left" | "right", clientX: number) => {
     dragRef.current = {
       startX: clientX,
@@ -722,6 +731,26 @@ function App() {
             <span className="hero-version">{appVersion}</span>
           </div>
         </div>
+        <div className="mode-switch" role="tablist" aria-label="Sabio mode">
+          <button
+            type="button"
+            className={session.appMode === "chat" ? "mode-button is-active" : "mode-button"}
+            role="tab"
+            aria-selected={session.appMode === "chat"}
+            onClick={() => updateAppMode("chat")}
+          >
+            Chat
+          </button>
+          <button
+            type="button"
+            className={session.appMode === "agent" ? "mode-button is-active" : "mode-button"}
+            role="tab"
+            aria-selected={session.appMode === "agent"}
+            onClick={() => updateAppMode("agent")}
+          >
+            Agent
+          </button>
+        </div>
         <div className="pane-footer">
           <button type="button" className="secondary-button" onClick={() => setActivePanel("help")}>
             Help
@@ -730,64 +759,105 @@ function App() {
             Legal
           </button>
         </div>
-        <div className="pane-header">
-          <h2>Files</h2>
-          <label className="upload-button">
-            Upload
-            <input type="file" multiple onChange={handleUpload} />
-          </label>
-        </div>
-        <div className="pane-content scrollable">
-          {files.length === 0 ? <p className="empty-state">Upload files to add local context.</p> : null}
-          {files.map((file) => (
-            <article className="file-card" key={file.id}>
-              <label className="file-include-toggle">
-                <input
-                  checked={file.isSelected}
-                  type="checkbox"
-                  onChange={() =>
-                    setFiles((current) =>
-                      current.map((entry) =>
-                        entry.id === file.id ? { ...entry, isSelected: !entry.isSelected } : entry
-                      )
-                    )
-                  }
-                />
-                <span>Included?</span>
+        {session.appMode === "chat" ? (
+          <>
+            <div className="pane-header">
+              <h2>Files</h2>
+              <label className="upload-button">
+                Upload
+                <input type="file" multiple onChange={handleUpload} />
               </label>
-              <div className="file-card-body">
-                <div className="file-card-main">
-                  <strong>{file.name}</strong>
-                  <p>{file.type || "text/plain"}</p>
-                  <p>{Math.round(file.size / 1024)} KB</p>
-                  <p>{new Date(file.uploadedAt).toLocaleString()}</p>
-                  {file.warning ? <span className="warning-tag">{file.warning}</span> : null}
-                </div>
-                <button
-                  type="button"
-                  className="secondary-button remove-file-button"
-                  onClick={() => setFiles((current) => current.filter((entry) => entry.id !== file.id))}
-                >
-                  Remove
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
+            </div>
+            <div className="pane-content scrollable">
+              {files.length === 0 ? <p className="empty-state">Upload files to add local context.</p> : null}
+              {files.map((file) => (
+                <article className="file-card" key={file.id}>
+                  <label className="file-include-toggle">
+                    <input
+                      checked={file.isSelected}
+                      type="checkbox"
+                      onChange={() =>
+                        setFiles((current) =>
+                          current.map((entry) =>
+                            entry.id === file.id ? { ...entry, isSelected: !entry.isSelected } : entry
+                          )
+                        )
+                      }
+                    />
+                    <span>Included?</span>
+                  </label>
+                  <div className="file-card-body">
+                    <div className="file-card-main">
+                      <strong>{file.name}</strong>
+                      <p>{file.type || "text/plain"}</p>
+                      <p>{Math.round(file.size / 1024)} KB</p>
+                      <p>{new Date(file.uploadedAt).toLocaleString()}</p>
+                      {file.warning ? <span className="warning-tag">{file.warning}</span> : null}
+                    </div>
+                    <button
+                      type="button"
+                      className="secondary-button remove-file-button"
+                      onClick={() => setFiles((current) => current.filter((entry) => entry.id !== file.id))}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="pane-header">
+              <h2>Workspace</h2>
+            </div>
+            <div className="pane-content scrollable agent-sidebar">
+              <section className="agent-status-card">
+                <span>Trust</span>
+                <strong>Not trusted</strong>
+              </section>
+              <section className="agent-status-card">
+                <span>Path</span>
+                <strong>No workspace selected</strong>
+              </section>
+              <section className="agent-status-card">
+                <span>Branch</span>
+                <strong>Unavailable</strong>
+              </section>
+              <section className="agent-file-tree">
+                <h3>Files</h3>
+                <p className="empty-state">No workspace tree loaded.</p>
+              </section>
+            </div>
+          </>
+        )}
       </aside>
 
       <div className="splitter" onMouseDown={(event) => startResize("left", event.clientX)} />
 
       <main className="pane pane-center" style={{ width: `${session.paneWidths.center}%` }}>
-        <div className="toolbar">
-          <button type="button" onClick={resetConversation}>
-            Clear context
-          </button>
-          {contextWarning ? <span className="status-warning">{contextWarning}</span> : null}
-          {status ? <span className="status-note">{status}</span> : null}
-        </div>
+        {session.appMode === "chat" ? (
+          <div className="toolbar">
+            <button type="button" onClick={resetConversation}>
+              Clear context
+            </button>
+            {contextWarning ? <span className="status-warning">{contextWarning}</span> : null}
+            {status ? <span className="status-note">{status}</span> : null}
+          </div>
+        ) : (
+          <div className="toolbar agent-toolbar">
+            <div>
+              <strong>Agent Mode</strong>
+              <span className="status-note">Workspace execution disabled until trust and sessions are wired.</span>
+            </div>
+            <button type="button" className="secondary-button" disabled>
+              Select workspace
+            </button>
+          </div>
+        )}
 
-        <div className="pane-content chat-scroll" ref={chatScrollRef}>
+        {session.appMode === "chat" ? (
+          <div className="pane-content chat-scroll" ref={chatScrollRef}>
           {messages.length === 0 ? (
             <div className="empty-chat">
               <p>Ask Sabio to analyze files, draft Markdown, or work with your local Ollama models.</p>
@@ -944,9 +1014,28 @@ function App() {
               </button>
             </div>
           ) : null}
-        </div>
+          </div>
+        ) : (
+          <div className="pane-content agent-transcript">
+            <article className="agent-event">
+              <div className="message-meta">
+                <span>Session</span>
+                <span>Idle</span>
+              </div>
+              <p>No agent run is active.</p>
+            </article>
+            <article className="agent-event">
+              <div className="message-meta">
+                <span>Plan</span>
+                <span>Pending</span>
+              </div>
+              <p>Plan events will appear here after workspace trust and the agent loop are enabled.</p>
+            </article>
+          </div>
+        )}
 
-        <div className="composer">
+        {session.appMode === "chat" ? (
+          <div className="composer">
           <div className="composer-input-row">
             <div className="prompt-history-controls" aria-label="Prompt history controls">
               <button
@@ -998,16 +1087,31 @@ function App() {
               </button>
             </div>
           </div>
-        </div>
+          </div>
+        ) : (
+          <div className="composer agent-composer">
+            <textarea placeholder="Describe an agent task." disabled />
+            <div className="composer-actions">
+              <div className="selection-summary">
+                <span>{session.selectedModel || "No model selected"}</span>
+                <span>No workspace selected</span>
+              </div>
+              <button type="button" disabled>
+                Run agent
+              </button>
+            </div>
+          </div>
+        )}
       </main>
 
       <div className="splitter" onMouseDown={(event) => startResize("right", event.clientX)} />
 
       <aside className="pane pane-right" style={{ width: `${session.paneWidths.right}%` }}>
         <div className="pane-header">
-          <h2>Settings</h2>
+          <h2>{session.appMode === "chat" ? "Settings" : "Agent Console"}</h2>
         </div>
-        <div className="pane-content scrollable settings-stack">
+        {session.appMode === "chat" ? (
+          <div className="pane-content scrollable settings-stack">
           <section className="settings-card display-preferences-card">
             <h3>Display Preferences</h3>
             <label className="field">
@@ -1120,7 +1224,23 @@ function App() {
               </button>
             ) : null}
           </section>
-        </div>
+          </div>
+        ) : (
+          <div className="pane-content scrollable settings-stack">
+            <section className="settings-card">
+              <h3>Approvals</h3>
+              <p className="empty-state">No approvals pending.</p>
+            </section>
+            <section className="settings-card">
+              <h3>Command Log</h3>
+              <p className="empty-state">No command output yet.</p>
+            </section>
+            <section className="settings-card">
+              <h3>Diff</h3>
+              <p className="empty-state">No file changes yet.</p>
+            </section>
+          </div>
+        )}
       </aside>
 
       {activePanel ? (

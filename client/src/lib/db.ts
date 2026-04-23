@@ -7,6 +7,7 @@ const DB_VERSION = 2;
 const SESSION_KEY = "session";
 
 const defaultSession: SessionState = {
+  appMode: "chat",
   selectedModel: "",
   systemPrompt: "",
   selectedSystemPromptProfileId: "generic",
@@ -51,6 +52,7 @@ export const loadSession = async () => {
     ...stored,
     paneWidths: stored?.paneWidths ?? defaultSession.paneWidths,
     displayPreferences: stored?.displayPreferences ?? defaultSession.displayPreferences,
+    appMode: stored?.appMode ?? "chat",
     selectedSystemPromptProfileId: stored?.selectedSystemPromptProfileId ?? "generic"
   };
 };
