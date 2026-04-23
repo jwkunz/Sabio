@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 
 use super::{
     storage,
-    tools::{execute_read_only_tool, AgentToolName, ToolExecutionRequest},
+    tools::{execute_read_only_tool, execute_write_tool, AgentToolName, ToolExecutionRequest},
     types::{
         AgentApiError, AgentApprovalStatus, AgentEventType, AgentPlan, AgentPlanStepStatus,
         AgentSessionRecord, RunPlanResponse,
@@ -57,7 +57,7 @@ pub async fn run_approved_plan(
         json!({
             "tool": "agent_loop",
             "planId": plan.id,
-            "message": "Started approved read-only plan run."
+            "message": "Started approved plan run."
         }),
     )
     .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
@@ -94,7 +94,7 @@ pub async fn run_approved_plan(
             }
         };
 
-        if !is_read_only_tool(&action.tool) {
+        if !is_agent_loop_tool(&action.tool) {
             let _ = storage::update_plan_step_status(
                 session_id,
                 &plan.id,
@@ -103,7 +103,7 @@ pub async fn run_approved_plan(
             );
             return Err(agent_error(
                 StatusCode::BAD_GATEWAY,
-                "Model requested a non-read-only tool during the read-only agent loop.",
+                "Model requested a tool that is not available in the approved plan loop.",
             ));
         }
 
@@ -119,7 +119,8 @@ pub async fn run_approved_plan(
         )
         .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
 
-        let output = execute_read_only_tool(ToolExecutionRequest {
+        let is_write_action = is_write_tool(&action.tool);
+        let output = execute_step_tool(ToolExecutionRequest {
             workspace_path: session.workspace_path.clone(),
             tool: action.tool.clone(),
             args: action.args.clone(),
@@ -139,6 +140,19 @@ pub async fn run_approved_plan(
         )
         .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
 
+        if output_ok && is_write_action {
+            let _ = storage::append_event(
+                session_id,
+                AgentEventType::PatchCreated,
+                json!({
+                    "tool": output.tool,
+                    "payload": output.payload,
+                    "stepId": step.id,
+                }),
+            )
+            .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
+        }
+
         if !output_ok {
             let _ = storage::update_plan_step_status(
                 session_id,
@@ -148,14 +162,14 @@ pub async fn run_approved_plan(
             );
             return Err(agent_error(
                 StatusCode::BAD_REQUEST,
-                "Read-only tool execution failed during plan run.",
+                "Tool execution failed during plan run.",
             ));
         }
 
         let note = action
             .note
             .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| format!("Completed read-only inspection for '{}'.", step.title));
+            .unwrap_or_else(|| format!("Completed plan step '{}'.", step.title));
         summary_parts.push(note.clone());
         let _ = storage::append_event(
             session_id,
@@ -177,7 +191,7 @@ pub async fn run_approved_plan(
     }
 
     let summary = if summary_parts.is_empty() {
-        "Approved read-only plan run completed.".to_string()
+        "Approved plan run completed.".to_string()
     } else {
         summary_parts.join("\n")
     };
@@ -210,9 +224,9 @@ async fn request_step_action(
     step_detail: &str,
 ) -> Result<ModelStepAction, (StatusCode, Json<AgentApiError>)> {
     let prompt = format!(
-        r#"You are Sabio Agent Mode running an approved plan in read-only inspection mode.
+        r#"You are Sabio Agent Mode running one step of an approved plan.
 Return ONLY valid JSON with this shape:
-{{"tool":"git_status","args":{{}},"note":"short observation goal"}}
+{{"tool":"git_status","args":{{}},"note":"short observation or change summary"}}
 
 Allowed tool names:
 - list_files with args {{"path":"."}}
@@ -220,9 +234,14 @@ Allowed tool names:
 - search_text with args {{"pattern":"literal or regex","path":"optional/relative/path"}}
 - git_status with args {{}}
 - git_diff with args {{}}
+- apply_patch with args {{"patch":"unified diff that applies cleanly with git apply"}}
+- write_file with args {{"path":"relative/file","content":"complete UTF-8 content"}}
 
-Choose exactly one read-only tool that best advances this plan step.
-Do not request write_file, apply_patch, run_command, or git_commit.
+Choose exactly one tool that best advances this plan step.
+Prefer apply_patch for modifying existing files.
+Use write_file only for clearly bounded new files or full-file replacement.
+Do not request run_command or git_commit.
+Do not delete files.
 
 Workspace: {}
 Plan: {}
@@ -299,7 +318,15 @@ fn ensure_plan_approved(
     Ok(())
 }
 
-fn is_read_only_tool(tool: &AgentToolName) -> bool {
+fn execute_step_tool(request: ToolExecutionRequest) -> super::tools::ToolExecutionResponse {
+    if is_write_tool(&request.tool) {
+        execute_write_tool(request)
+    } else {
+        execute_read_only_tool(request)
+    }
+}
+
+fn is_agent_loop_tool(tool: &AgentToolName) -> bool {
     matches!(
         tool,
         AgentToolName::ListFiles
@@ -307,7 +334,13 @@ fn is_read_only_tool(tool: &AgentToolName) -> bool {
             | AgentToolName::SearchText
             | AgentToolName::GitStatus
             | AgentToolName::GitDiff
+            | AgentToolName::WriteFile
+            | AgentToolName::ApplyPatch
     )
+}
+
+fn is_write_tool(tool: &AgentToolName) -> bool {
+    matches!(tool, AgentToolName::WriteFile | AgentToolName::ApplyPatch)
 }
 
 fn extract_json_object(raw: &str) -> Option<String> {
