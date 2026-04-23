@@ -638,13 +638,19 @@ fn execute_apply_patch(workspace_root: &Path, args: &Value) -> Result<Value, Str
         .spawn()
         .map_err(|error| error.to_string())?;
 
+    let patch_input = if patch.ends_with('\n') {
+        patch.to_string()
+    } else {
+        format!("{patch}\n")
+    };
+
     {
         let stdin = child
             .stdin
             .as_mut()
             .ok_or_else(|| "Unable to open git apply stdin.".to_string())?;
         stdin
-            .write_all(patch.as_bytes())
+            .write_all(patch_input.as_bytes())
             .map_err(|error| error.to_string())?;
     }
 
