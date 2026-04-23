@@ -17,13 +17,15 @@ use serde_json::json;
 
 use super::storage;
 use super::tools::{
-    execute_command, execute_read_only_tool, tool_specs, validate_tool_call,
-    CommandExecutionRequest, ToolCallValidationRequest, ToolExecutionRequest,
+    execute_command, execute_read_only_tool, preview_command, tool_specs, validate_tool_call,
+    CommandClassification, CommandExecutionRequest, ToolCallValidationRequest,
+    ToolExecutionRequest,
 };
 use super::types::{
-    AgentApiError, AgentCapability, AgentEventsResponse, AgentHealthResponse, AgentRouteStatus,
-    AgentSessionRecord, AgentSessionSummary, AgentWorkspaceStatus, CreateSessionRequest,
-    ListSessionsQuery, RenameSessionRequest, ValidateWorkspaceRequest, ValidateWorkspaceResponse,
+    AgentApiError, AgentApprovalKind, AgentApprovalsResponse, AgentCapability, AgentEventsResponse,
+    AgentHealthResponse, AgentRouteStatus, AgentSessionRecord, AgentSessionSummary,
+    AgentWorkspaceStatus, CreateSessionRequest, ListSessionsQuery, RenameSessionRequest,
+    ResolveApprovalRequest, ValidateWorkspaceRequest, ValidateWorkspaceResponse,
 };
 
 pub fn router<S>() -> Router<S>
@@ -47,6 +49,15 @@ where
         .route(
             "/sessions/:session_id/events/stream",
             get(session_event_stream),
+        )
+        .route("/sessions/:session_id/approvals", get(session_approvals))
+        .route(
+            "/sessions/:session_id/approvals/command",
+            post(request_command_approval),
+        )
+        .route(
+            "/sessions/:session_id/approvals/:approval_id/resolve",
+            post(resolve_approval),
         )
         .route("/workspace", get(workspace_status))
         .route("/workspace/validate", post(validate_workspace))
@@ -155,6 +166,74 @@ async fn session_events(
     Ok(Json(AgentEventsResponse {
         events: session.event_log,
     }))
+}
+
+async fn session_approvals(
+    AxumPath(session_id): AxumPath<String>,
+) -> Result<Json<AgentApprovalsResponse>, (StatusCode, Json<AgentApiError>)> {
+    storage::list_approvals(&session_id)
+        .map(|approvals| Json(AgentApprovalsResponse { approvals }))
+        .map_err(|error| agent_error(StatusCode::NOT_FOUND, error))
+}
+
+async fn request_command_approval(
+    AxumPath(session_id): AxumPath<String>,
+    Json(request): Json<CommandExecutionRequest>,
+) -> Result<Json<super::types::AgentApproval>, (StatusCode, Json<AgentApiError>)> {
+    let preview = preview_command(&request);
+
+    if preview.blocked {
+        return Err(agent_error(
+            StatusCode::BAD_REQUEST,
+            preview
+                .errors
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "Command is blocked by Sabio policy.".to_string()),
+        ));
+    }
+
+    let kind = match preview.classification {
+        CommandClassification::NetworkApprovalRequired => AgentApprovalKind::NetworkCommand,
+        CommandClassification::DestructiveApprovalRequired => AgentApprovalKind::DestructiveCommand,
+        CommandClassification::Autonomous => {
+            return Err(agent_error(
+                StatusCode::BAD_REQUEST,
+                "Command does not require approval.",
+            ));
+        }
+        CommandClassification::Blocked => {
+            return Err(agent_error(
+                StatusCode::BAD_REQUEST,
+                "Command is blocked by Sabio policy.",
+            ));
+        }
+    };
+    let title = format!("{} {}", request.command, request.args.join(" "))
+        .trim()
+        .to_string();
+    let detail = match kind {
+        AgentApprovalKind::NetworkCommand => "Network command requires approval.",
+        AgentApprovalKind::DestructiveCommand => "Destructive command requires approval.",
+        AgentApprovalKind::FileDeletion => "File deletion requires approval.",
+        AgentApprovalKind::Plan => "Plan requires approval.",
+    }
+    .to_string();
+    let payload = serde_json::to_value(&request)
+        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error.to_string()))?;
+
+    storage::create_approval(&session_id, kind, title, detail, payload)
+        .map(Json)
+        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))
+}
+
+async fn resolve_approval(
+    AxumPath((session_id, approval_id)): AxumPath<(String, String)>,
+    Json(request): Json<ResolveApprovalRequest>,
+) -> Result<Json<super::types::AgentApproval>, (StatusCode, Json<AgentApiError>)> {
+    storage::resolve_approval(&session_id, &approval_id, request.approved)
+        .map(Json)
+        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))
 }
 
 async fn session_event_stream(

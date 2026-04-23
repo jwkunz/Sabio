@@ -112,3 +112,17 @@ export interface AgentToolSpec {
   description: string;
   requiredArgs: string[];
 }
+
+export type AgentApprovalStatus = "pending" | "approved" | "rejected";
+
+export interface AgentApproval {
+  id: string;
+  sessionId: string;
+  createdAt: number;
+  resolvedAt?: number | null;
+  kind: string;
+  status: AgentApprovalStatus;
+  title: string;
+  detail: string;
+  payload: Record<string, unknown>;
+}

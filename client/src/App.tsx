@@ -28,6 +28,7 @@ import {
 import { normalizeMathDelimiters } from "./lib/markdown";
 import type {
   AppMode,
+  AgentApproval,
   AgentEvent,
   AgentSessionSummary,
   AgentToolSpec,
@@ -127,6 +128,7 @@ function App() {
   const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
   const [agentSessionStatus, setAgentSessionStatus] = useState("");
   const [agentTools, setAgentTools] = useState<AgentToolSpec[]>([]);
+  const [agentApprovals, setAgentApprovals] = useState<AgentApproval[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ startX: number; widths: PaneWidths; handle: "left" | "right" } | null>(null);
@@ -299,10 +301,12 @@ function App() {
   useEffect(() => {
     if (!selectedAgentSessionId) {
       setAgentEvents([]);
+      setAgentApprovals([]);
       return;
     }
 
     void loadAgentEvents(selectedAgentSessionId);
+    void loadAgentApprovals(selectedAgentSessionId);
   }, [selectedAgentSessionId]);
 
   useEffect(() => {
@@ -815,6 +819,56 @@ function App() {
       setAgentEvents(payload.events);
     } catch (eventError) {
       setAgentSessionStatus((eventError as Error).message || "Unable to load agent events.");
+    }
+  };
+
+  const loadAgentApprovals = async (sessionId: string) => {
+    try {
+      const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/approvals`);
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Unable to load approvals.");
+      }
+
+      const payload = (await response.json()) as { approvals: AgentApproval[] };
+      setAgentApprovals(payload.approvals);
+    } catch (approvalError) {
+      setAgentSessionStatus((approvalError as Error).message || "Unable to load approvals.");
+    }
+  };
+
+  const resolveAgentApproval = async (approvalId: string, approved: boolean) => {
+    if (!selectedAgentSessionId) {
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `/api/agent/sessions/${encodeURIComponent(selectedAgentSessionId)}/approvals/${encodeURIComponent(
+          approvalId
+        )}/resolve`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ approved })
+        }
+      );
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Unable to resolve approval.");
+      }
+
+      await Promise.all([
+        loadAgentApprovals(selectedAgentSessionId),
+        loadAgentEvents(selectedAgentSessionId)
+      ]);
+      setAgentSessionStatus(approved ? "Approval accepted." : "Approval rejected.");
+    } catch (approvalError) {
+      setAgentSessionStatus((approvalError as Error).message || "Unable to resolve approval.");
     }
   };
 
@@ -1626,7 +1680,36 @@ function App() {
             </section>
             <section className="settings-card">
               <h3>Approvals</h3>
-              <p className="empty-state">No approvals pending.</p>
+              {agentApprovals.length === 0 ? (
+                <p className="empty-state">No approvals pending.</p>
+              ) : (
+                <div className="approval-list">
+                  {agentApprovals.map((approval) => (
+                    <article className={`approval-card approval-${approval.status}`} key={approval.id}>
+                      <div className="approval-card-header">
+                        <strong>{approval.title}</strong>
+                        <span>{formatAgentEventType(approval.status)}</span>
+                      </div>
+                      <p>{approval.detail}</p>
+                      <small>{formatAgentEventType(approval.kind)}</small>
+                      {approval.status === "pending" ? (
+                        <div className="approval-actions">
+                          <button type="button" onClick={() => void resolveAgentApproval(approval.id, true)}>
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            className="danger-button"
+                            onClick={() => void resolveAgentApproval(approval.id, false)}
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      ) : null}
+                    </article>
+                  ))}
+                </div>
+              )}
             </section>
             <section className="settings-card">
               <h3>Command Log</h3>

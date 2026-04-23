@@ -35,7 +35,7 @@ pub struct ToolExecutionRequest {
     pub args: Value,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandExecutionRequest {
     pub workspace_path: String,
@@ -254,21 +254,21 @@ pub fn execute_read_only_tool(request: ToolExecutionRequest) -> ToolExecutionRes
 }
 
 pub async fn execute_command(request: CommandExecutionRequest) -> CommandExecutionResponse {
-    let errors = validate_command_request(&request);
+    let preview = preview_command(&request);
 
-    if !errors.is_empty() {
+    if !preview.errors.is_empty() {
         return command_response(
-            CommandClassification::Blocked,
+            preview.classification,
             true,
             None,
             String::new(),
             String::new(),
             false,
-            errors,
+            preview.errors,
         );
     }
 
-    let classification = classify_command(&request.command, &request.args);
+    let classification = preview.classification;
 
     if classification == CommandClassification::Blocked {
         return command_response(
@@ -428,6 +428,26 @@ pub fn classify_command(command: &str, args: &[String]) -> CommandClassification
     }
 
     CommandClassification::Autonomous
+}
+
+pub fn preview_command(request: &CommandExecutionRequest) -> CommandExecutionResponse {
+    let errors = validate_command_request(request);
+    let classification = if errors.is_empty() {
+        classify_command(&request.command, &request.args)
+    } else {
+        CommandClassification::Blocked
+    };
+    let blocked = classification == CommandClassification::Blocked || !errors.is_empty();
+
+    command_response(
+        classification,
+        blocked,
+        None,
+        String::new(),
+        String::new(),
+        false,
+        errors,
+    )
 }
 
 fn execute_list_files(workspace_root: &Path, args: &Value) -> Result<Value, String> {

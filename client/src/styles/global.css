@@ -794,6 +794,60 @@ button:disabled {
   padding: 0.65rem 0.75rem;
 }
 
+.approval-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.approval-card {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--control-bg);
+  padding: 0.85rem;
+}
+
+.approval-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.approval-card-header strong {
+  overflow-wrap: anywhere;
+}
+
+.approval-card-header span,
+.approval-card small,
+.approval-card p {
+  color: var(--muted);
+}
+
+.approval-card p {
+  margin: 0.55rem 0 0.35rem;
+  line-height: 1.45;
+}
+
+.approval-approved {
+  border-color: rgba(123, 223, 246, 0.3);
+}
+
+.approval-rejected {
+  border-color: rgba(255, 122, 122, 0.35);
+}
+
+.approval-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem;
+  margin-top: 0.75rem;
+}
+
+.approval-actions button {
+  padding: 0.55rem 0.7rem;
+}
+
 .agent-tool-row {
   border: 1px solid var(--border);
   border-radius: 14px;

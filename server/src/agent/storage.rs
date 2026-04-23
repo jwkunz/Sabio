@@ -7,7 +7,10 @@ use chrono::Utc;
 use serde_json::json;
 use uuid::Uuid;
 
-use super::types::{AgentEvent, AgentEventType, AgentSessionRecord};
+use super::types::{
+    AgentApproval, AgentApprovalKind, AgentApprovalStatus, AgentEvent, AgentEventType,
+    AgentSessionRecord,
+};
 
 const MAX_EVENTS_PER_SESSION: usize = 500;
 const MAX_EVENT_PAYLOAD_CHARS: usize = 12_000;
@@ -71,6 +74,7 @@ pub fn create_session(
         memory_summary: String::new(),
         preferred_commands: Vec::new(),
         event_log: Vec::new(),
+        approvals: Vec::new(),
     };
 
     let event_workspace_path = session.workspace_path.clone();
@@ -106,6 +110,84 @@ pub fn rename_session(id: &str, title: String) -> Result<AgentSessionRecord, Str
     session.updated_at = Utc::now().timestamp_millis();
     write_session(&session)?;
     Ok(session)
+}
+
+pub fn create_approval(
+    session_id: &str,
+    kind: AgentApprovalKind,
+    title: String,
+    detail: String,
+    payload: serde_json::Value,
+) -> Result<AgentApproval, String> {
+    let mut session = get_session(session_id)?;
+    let now = Utc::now().timestamp_millis();
+    let approval = AgentApproval {
+        id: Uuid::new_v4().to_string(),
+        session_id: session.id.clone(),
+        created_at: now,
+        resolved_at: None,
+        kind,
+        status: AgentApprovalStatus::Pending,
+        title,
+        detail,
+        payload,
+    };
+
+    let event_payload = serde_json::to_value(&approval).map_err(|error| error.to_string())?;
+    session.approvals.push(approval.clone());
+    push_event(
+        &mut session,
+        AgentEventType::ApprovalRequested,
+        event_payload,
+        None,
+    );
+    write_session(&session)?;
+    Ok(approval)
+}
+
+pub fn list_approvals(session_id: &str) -> Result<Vec<AgentApproval>, String> {
+    Ok(get_session(session_id)?.approvals)
+}
+
+pub fn resolve_approval(
+    session_id: &str,
+    approval_id: &str,
+    approved: bool,
+) -> Result<AgentApproval, String> {
+    let mut session = get_session(session_id)?;
+    let now = Utc::now().timestamp_millis();
+    let mut resolved = None;
+
+    for approval in &mut session.approvals {
+        if approval.id != approval_id {
+            continue;
+        }
+
+        if approval.status != AgentApprovalStatus::Pending {
+            return Err("Approval has already been resolved.".to_string());
+        }
+
+        approval.status = if approved {
+            AgentApprovalStatus::Approved
+        } else {
+            AgentApprovalStatus::Rejected
+        };
+        approval.resolved_at = Some(now);
+        resolved = Some(approval.clone());
+        break;
+    }
+
+    let resolved = resolved.ok_or_else(|| "Approval not found.".to_string())?;
+    let event_payload = serde_json::to_value(&resolved).map_err(|error| error.to_string())?;
+
+    push_event(
+        &mut session,
+        AgentEventType::ApprovalResolved,
+        event_payload,
+        None,
+    );
+    write_session(&session)?;
+    Ok(resolved)
 }
 
 pub fn write_session(session: &AgentSessionRecord) -> Result<(), String> {

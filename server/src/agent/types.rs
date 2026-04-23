@@ -58,6 +58,8 @@ pub struct AgentSessionRecord {
     pub memory_summary: String,
     pub preferred_commands: Vec<String>,
     pub event_log: Vec<AgentEvent>,
+    #[serde(default)]
+    pub approvals: Vec<AgentApproval>,
 }
 
 impl AgentSessionRecord {
@@ -101,6 +103,37 @@ pub enum AgentEventType {
     Error,
     Cancelled,
     SessionFinished,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentApproval {
+    pub id: String,
+    pub session_id: String,
+    pub created_at: i64,
+    pub resolved_at: Option<i64>,
+    pub kind: AgentApprovalKind,
+    pub status: AgentApprovalStatus,
+    pub title: String,
+    pub detail: String,
+    pub payload: Value,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentApprovalKind {
+    NetworkCommand,
+    DestructiveCommand,
+    FileDeletion,
+    Plan,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentApprovalStatus {
+    Pending,
+    Approved,
+    Rejected,
 }
 
 #[derive(Debug, Serialize)]
@@ -155,4 +188,16 @@ pub struct RenameSessionRequest {
 #[serde(rename_all = "camelCase")]
 pub struct AgentEventsResponse {
     pub events: Vec<AgentEvent>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentApprovalsResponse {
+    pub approvals: Vec<AgentApproval>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolveApprovalRequest {
+    pub approved: bool,
 }
