@@ -80,6 +80,22 @@ pub struct CommandExecutionResponse {
     pub errors: Vec<String>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitRequest {
+    pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitResponse {
+    pub ok: bool,
+    pub commit_hash: Option<String>,
+    pub stdout: String,
+    pub stderr: String,
+    pub errors: Vec<String>,
+}
+
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandClassification {
@@ -312,6 +328,53 @@ pub fn execute_write_tool(request: ToolExecutionRequest) -> ToolExecutionRespons
             errors: vec![error],
         },
     }
+}
+
+pub fn execute_git_commit(workspace_path: &str, request: GitCommitRequest) -> GitCommitResponse {
+    let message = request.message.trim();
+
+    if message.is_empty() {
+        return git_commit_response(
+            None,
+            String::new(),
+            String::new(),
+            vec!["Commit message is required.".to_string()],
+        );
+    }
+
+    let workspace_root = match canonical_workspace_root(workspace_path) {
+        Ok(path) => path,
+        Err(error) => return git_commit_response(None, String::new(), String::new(), vec![error]),
+    };
+
+    let status = match execute_git_raw(&workspace_root, &["status", "--porcelain"]) {
+        Ok(output) => output,
+        Err(error) => return git_commit_response(None, error.stdout, error.stderr, error.errors),
+    };
+
+    if status.stdout.trim().is_empty() {
+        return git_commit_response(
+            None,
+            status.stdout,
+            status.stderr,
+            vec!["No changes to commit.".to_string()],
+        );
+    }
+
+    if let Err(error) = execute_git_raw(&workspace_root, &["add", "--all"]) {
+        return git_commit_response(None, error.stdout, error.stderr, error.errors);
+    }
+
+    let commit = match execute_git_raw(&workspace_root, &["commit", "-m", message]) {
+        Ok(output) => output,
+        Err(error) => return git_commit_response(None, error.stdout, error.stderr, error.errors),
+    };
+    let hash = match execute_git_raw(&workspace_root, &["rev-parse", "HEAD"]) {
+        Ok(output) => output.stdout.trim().to_string(),
+        Err(error) => return git_commit_response(None, error.stdout, error.stderr, error.errors),
+    };
+
+    git_commit_response(Some(hash), commit.stdout, commit.stderr, Vec::new())
 }
 
 pub async fn execute_command(request: CommandExecutionRequest) -> CommandExecutionResponse {
@@ -746,23 +809,68 @@ fn search_path(
 }
 
 fn execute_git(workspace_root: &Path, args: &[&str]) -> Result<Value, String> {
+    let output = execute_git_raw(workspace_root, args).map_err(|error| error.errors.join("; "))?;
+
+    Ok(json!({
+        "stdout": output.stdout,
+        "stderr": output.stderr,
+        "exitCode": output.exit_code,
+    }))
+}
+
+struct RawCommandOutput {
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    errors: Vec<String>,
+}
+
+fn execute_git_raw(
+    workspace_root: &Path,
+    args: &[&str],
+) -> Result<RawCommandOutput, RawCommandOutput> {
     let output = Command::new("git")
         .arg("-C")
         .arg(workspace_root)
         .args(args)
         .stdin(Stdio::null())
         .output()
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| RawCommandOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: None,
+            errors: vec![error.to_string()],
+        })?;
+    let raw = RawCommandOutput {
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        exit_code: output.status.code(),
+        errors: Vec::new(),
+    };
 
     if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        return Err(RawCommandOutput {
+            errors: vec![raw.stderr.trim().to_string()],
+            ..raw
+        });
     }
 
-    Ok(json!({
-        "stdout": String::from_utf8_lossy(&output.stdout),
-        "stderr": String::from_utf8_lossy(&output.stderr),
-        "exitCode": output.status.code(),
-    }))
+    Ok(raw)
+}
+
+fn git_commit_response(
+    commit_hash: Option<String>,
+    stdout: String,
+    stderr: String,
+    errors: Vec<String>,
+) -> GitCommitResponse {
+    GitCommitResponse {
+        ok: errors.is_empty() && commit_hash.is_some(),
+        commit_hash,
+        stdout,
+        stderr,
+        errors,
+    }
 }
 
 fn canonical_workspace_root(path: &str) -> Result<PathBuf, String> {
