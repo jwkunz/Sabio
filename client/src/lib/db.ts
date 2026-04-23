@@ -20,6 +20,15 @@ const defaultSession: SessionState = {
   displayPreferences: {
     theme: "dark",
     fontSize: "medium"
+  },
+  agentWorkspace: {
+    inputPath: "",
+    canonicalPath: "",
+    isGitRepo: false,
+    gitBranch: "",
+    cleanWorktree: null,
+    trusted: false,
+    message: "No workspace selected."
   }
 };
 
@@ -52,6 +61,10 @@ export const loadSession = async () => {
     ...stored,
     paneWidths: stored?.paneWidths ?? defaultSession.paneWidths,
     displayPreferences: stored?.displayPreferences ?? defaultSession.displayPreferences,
+    agentWorkspace: {
+      ...defaultSession.agentWorkspace,
+      ...stored?.agentWorkspace
+    },
     appMode: stored?.appMode ?? "chat",
     selectedSystemPromptProfileId: stored?.selectedSystemPromptProfileId ?? "generic"
   };

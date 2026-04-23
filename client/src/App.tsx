@@ -87,7 +87,16 @@ function App() {
     selectedSystemPromptProfileId: "generic",
     draftInput: "",
     paneWidths: defaultPaneWidths,
-    displayPreferences: defaultDisplayPreferences
+    displayPreferences: defaultDisplayPreferences,
+    agentWorkspace: {
+      inputPath: "",
+      canonicalPath: "",
+      isGitRepo: false,
+      gitBranch: "",
+      cleanWorktree: null,
+      trusted: false,
+      message: "No workspace selected."
+    }
   });
   const [systemPromptProfiles, setSystemPromptProfiles] = useState<SystemPromptProfile[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
@@ -706,6 +715,103 @@ function App() {
     }));
   };
 
+  const updateWorkspaceInput = (inputPath: string) => {
+    setSession((current) => ({
+      ...current,
+      agentWorkspace: {
+        ...current.agentWorkspace,
+        inputPath,
+        trusted: false
+      }
+    }));
+  };
+
+  const validateWorkspace = async () => {
+    const path = session.agentWorkspace.inputPath.trim();
+
+    if (!path) {
+      setError("Enter a workspace path before validating.");
+      return;
+    }
+
+    setError("");
+
+    try {
+      const response = await fetch("/api/agent/workspace/validate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ path })
+      });
+
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            canonicalPath?: string;
+            isGitRepo?: boolean;
+            gitBranch?: string;
+            cleanWorktree?: boolean | null;
+            message?: string;
+            error?: string;
+          }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.error || "Workspace validation failed.");
+      }
+
+      setSession((current) => ({
+        ...current,
+        agentWorkspace: {
+          inputPath: path,
+          canonicalPath: payload?.canonicalPath ?? "",
+          isGitRepo: payload?.isGitRepo ?? false,
+          gitBranch: payload?.gitBranch ?? "",
+          cleanWorktree: payload?.cleanWorktree ?? null,
+          trusted: false,
+          message: payload?.message ?? "Workspace validated."
+        }
+      }));
+    } catch (workspaceError) {
+      setError((workspaceError as Error).message || "Workspace validation failed.");
+      setSession((current) => ({
+        ...current,
+        agentWorkspace: {
+          ...current.agentWorkspace,
+          trusted: false,
+          message: "Workspace validation failed."
+        }
+      }));
+    }
+  };
+
+  const trustWorkspace = () => {
+    setSession((current) => {
+      const workspace = current.agentWorkspace;
+      const canTrust = Boolean(workspace.canonicalPath && workspace.isGitRepo && workspace.cleanWorktree);
+
+      if (!canTrust) {
+        return {
+          ...current,
+          agentWorkspace: {
+            ...workspace,
+            trusted: false,
+            message: "Workspace must be a clean git repository before trust."
+          }
+        };
+      }
+
+      return {
+        ...current,
+        agentWorkspace: {
+          ...workspace,
+          trusted: true,
+          message: "Workspace trusted."
+        }
+      };
+    });
+  };
+
   const startResize = (handle: "left" | "right", clientX: number) => {
     dragRef.current = {
       startX: clientX,
@@ -812,17 +918,55 @@ function App() {
               <h2>Workspace</h2>
             </div>
             <div className="pane-content scrollable agent-sidebar">
+              <label className="field compact-field">
+                <span>Workspace path</span>
+                <input
+                  value={session.agentWorkspace.inputPath}
+                  onChange={(event) => updateWorkspaceInput(event.target.value)}
+                  placeholder="/path/to/project"
+                />
+              </label>
+              <div className="settings-button-row">
+                <button type="button" className="secondary-button" onClick={() => void validateWorkspace()}>
+                  Validate
+                </button>
+                <button
+                  type="button"
+                  onClick={trustWorkspace}
+                  disabled={
+                    !session.agentWorkspace.canonicalPath ||
+                    !session.agentWorkspace.isGitRepo ||
+                    session.agentWorkspace.cleanWorktree !== true
+                  }
+                >
+                  Trust
+                </button>
+              </div>
               <section className="agent-status-card">
                 <span>Trust</span>
-                <strong>Not trusted</strong>
+                <strong>{session.agentWorkspace.trusted ? "Trusted" : "Not trusted"}</strong>
               </section>
               <section className="agent-status-card">
                 <span>Path</span>
-                <strong>No workspace selected</strong>
+                <strong>{session.agentWorkspace.canonicalPath || "No workspace selected"}</strong>
               </section>
               <section className="agent-status-card">
                 <span>Branch</span>
-                <strong>Unavailable</strong>
+                <strong>{session.agentWorkspace.gitBranch || "Unavailable"}</strong>
+              </section>
+              <section className="agent-status-card">
+                <span>Git</span>
+                <strong>
+                  {session.agentWorkspace.isGitRepo
+                    ? session.agentWorkspace.cleanWorktree
+                      ? "Clean"
+                      : "Dirty"
+                    : "Not a git repository"}
+                </strong>
+              </section>
+              <section className="agent-status-card">
+                <span>Status</span>
+                <strong>{session.agentWorkspace.message}</strong>
               </section>
               <section className="agent-file-tree">
                 <h3>Files</h3>
@@ -848,10 +992,14 @@ function App() {
           <div className="toolbar agent-toolbar">
             <div>
               <strong>Agent Mode</strong>
-              <span className="status-note">Workspace execution disabled until trust and sessions are wired.</span>
+              <span className="status-note">
+                {session.agentWorkspace.trusted
+                  ? `Trusted workspace: ${session.agentWorkspace.gitBranch || "current branch"}`
+                  : session.agentWorkspace.message}
+              </span>
             </div>
-            <button type="button" className="secondary-button" disabled>
-              Select workspace
+            <button type="button" className="secondary-button" onClick={() => void validateWorkspace()}>
+              Validate workspace
             </button>
           </div>
         )}
@@ -1017,12 +1165,21 @@ function App() {
           </div>
         ) : (
           <div className="pane-content agent-transcript">
+            {error ? (
+              <div className="error-banner">
+                <span>{error}</span>
+              </div>
+            ) : null}
             <article className="agent-event">
               <div className="message-meta">
                 <span>Session</span>
-                <span>Idle</span>
+                <span>{session.agentWorkspace.trusted ? "Trusted" : "Blocked"}</span>
               </div>
-              <p>No agent run is active.</p>
+              <p>
+                {session.agentWorkspace.trusted
+                  ? "No agent run is active."
+                  : "Trust a clean git workspace before starting an agent run."}
+              </p>
             </article>
             <article className="agent-event">
               <div className="message-meta">
@@ -1094,7 +1251,7 @@ function App() {
             <div className="composer-actions">
               <div className="selection-summary">
                 <span>{session.selectedModel || "No model selected"}</span>
-                <span>No workspace selected</span>
+                <span>{session.agentWorkspace.canonicalPath || "No workspace selected"}</span>
               </div>
               <button type="button" disabled>
                 Run agent

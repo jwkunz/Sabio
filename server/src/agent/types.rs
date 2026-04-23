@@ -1,4 +1,11 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentApiError {
+    pub error: String,
+    pub detail: String,
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,5 +51,22 @@ pub struct AgentWorkspaceStatus {
     pub workspace_path: Option<String>,
     pub git_branch: Option<String>,
     pub clean_worktree: Option<bool>,
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidateWorkspaceRequest {
+    pub path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidateWorkspaceResponse {
+    pub canonical_path: String,
+    pub is_git_repo: bool,
+    pub git_branch: Option<String>,
+    pub clean_worktree: Option<bool>,
+    pub trusted: bool,
     pub message: String,
 }

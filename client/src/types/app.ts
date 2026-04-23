@@ -33,6 +33,16 @@ export interface DisplayPreferences {
   fontSize: DisplayFontSize;
 }
 
+export interface AgentWorkspaceState {
+  inputPath: string;
+  canonicalPath: string;
+  isGitRepo: boolean;
+  gitBranch: string;
+  cleanWorktree: boolean | null;
+  trusted: boolean;
+  message: string;
+}
+
 export interface SessionState {
   appMode: AppMode;
   selectedModel: string;
@@ -41,6 +51,7 @@ export interface SessionState {
   draftInput: string;
   paneWidths: PaneWidths;
   displayPreferences: DisplayPreferences;
+  agentWorkspace: AgentWorkspaceState;
 }
 
 export interface SystemPromptProfile {
