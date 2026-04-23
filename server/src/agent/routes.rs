@@ -16,6 +16,7 @@ use futures_util::Stream;
 use serde_json::json;
 
 use super::storage;
+use super::tools::{tool_specs, validate_tool_call, ToolCallValidationRequest};
 use super::types::{
     AgentApiError, AgentCapability, AgentEventsResponse, AgentHealthResponse, AgentRouteStatus,
     AgentSessionRecord, AgentSessionSummary, AgentWorkspaceStatus, CreateSessionRequest,
@@ -29,6 +30,8 @@ where
     Router::new()
         .route("/health", get(health))
         .route("/capabilities", get(capabilities))
+        .route("/tools", get(tools))
+        .route("/tools/validate", post(validate_tool))
         .route("/sessions", get(sessions).post(create_session))
         .route("/sessions/:session_id", get(session))
         .route("/sessions/:session_id/rename", post(rename_session))
@@ -61,6 +64,16 @@ async fn capabilities() -> Json<Vec<AgentCapability>> {
         AgentCapability::Approvals,
         AgentCapability::AgentLoop,
     ])
+}
+
+async fn tools() -> Json<Vec<super::tools::AgentToolSpec>> {
+    Json(tool_specs())
+}
+
+async fn validate_tool(
+    Json(request): Json<ToolCallValidationRequest>,
+) -> Json<super::tools::ToolCallValidationResponse> {
+    Json(validate_tool_call(request))
 }
 
 async fn sessions(
