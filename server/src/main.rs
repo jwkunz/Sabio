@@ -28,6 +28,8 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 use zip::ZipArchive;
 
+mod agent;
+
 const APP_URL: &str = "http://127.0.0.1:3000";
 const LARGE_FILE_BYTES: u64 = 1024 * 1024;
 
@@ -179,6 +181,7 @@ fn build_router(state: AppState) -> Router {
         .route("/api/models", get(models))
         .route("/api/upload", post(upload))
         .route("/api/chat", post(chat))
+        .nest("/api/agent", agent::router())
         .nest_service("/", static_service)
         .layer(DefaultBodyLimit::max(128 * 1024 * 1024))
         .layer(TraceLayer::new_for_http())
