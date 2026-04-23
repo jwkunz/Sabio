@@ -132,6 +132,7 @@ function App() {
   const [agentTools, setAgentTools] = useState<AgentToolSpec[]>([]);
   const [agentApprovals, setAgentApprovals] = useState<AgentApproval[]>([]);
   const [agentPlans, setAgentPlans] = useState<AgentPlan[]>([]);
+  const [isAgentRunning, setIsAgentRunning] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ startX: number; widths: PaneWidths; handle: "left" | "right" } | null>(null);
@@ -992,6 +993,7 @@ function App() {
     }
 
     setAgentSessionStatus(`Running approved plan: ${runnableAgentPlan.title}`);
+    setIsAgentRunning(true);
 
     try {
       const response = await fetch(
@@ -1028,6 +1030,35 @@ function App() {
         loadAgentApprovals(selectedAgentSessionId),
         loadAgentEvents(selectedAgentSessionId)
       ]);
+    } finally {
+      setIsAgentRunning(false);
+    }
+  };
+
+  const cancelAgentRun = async () => {
+    if (!selectedAgentSessionId) {
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `/api/agent/sessions/${encodeURIComponent(selectedAgentSessionId)}/run/cancel`,
+        {
+          method: "POST"
+        }
+      );
+      const payload = (await response.json().catch(() => null)) as
+        | { cancelled?: boolean; message?: string; error?: string }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.error || "Unable to cancel agent run.");
+      }
+
+      setAgentSessionStatus(payload?.message || "Cancellation requested.");
+      await loadAgentEvents(selectedAgentSessionId);
+    } catch (cancelError) {
+      setAgentSessionStatus((cancelError as Error).message || "Unable to cancel agent run.");
     }
   };
 
@@ -1199,6 +1230,59 @@ function App() {
     }
   };
 
+  const initializeGitWorkspace = async () => {
+    const path = session.agentWorkspace.canonicalPath || session.agentWorkspace.inputPath.trim();
+
+    if (!path) {
+      setError("Validate or enter a workspace path before initializing git.");
+      return;
+    }
+
+    setError("");
+    setAgentSessionStatus("Initializing git repository...");
+
+    try {
+      const response = await fetch("/api/agent/workspace/init-git", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ path })
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            canonicalPath?: string;
+            isGitRepo?: boolean;
+            gitBranch?: string;
+            cleanWorktree?: boolean | null;
+            message?: string;
+            error?: string;
+          }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.error || "Unable to initialize git repository.");
+      }
+
+      setSession((current) => ({
+        ...current,
+        agentWorkspace: {
+          inputPath: path,
+          canonicalPath: payload?.canonicalPath ?? "",
+          isGitRepo: payload?.isGitRepo ?? false,
+          gitBranch: payload?.gitBranch ?? "",
+          cleanWorktree: payload?.cleanWorktree ?? null,
+          trusted: false,
+          message: payload?.message ?? "Git repository initialized."
+        }
+      }));
+      setAgentSessionStatus(payload?.message ?? "Git repository initialized.");
+    } catch (workspaceError) {
+      setError((workspaceError as Error).message || "Unable to initialize git repository.");
+      setAgentSessionStatus((workspaceError as Error).message || "Unable to initialize git repository.");
+    }
+  };
+
   const trustWorkspace = async () => {
     const workspace = session.agentWorkspace;
     const canTrust = Boolean(workspace.canonicalPath && workspace.isGitRepo && workspace.cleanWorktree);
@@ -1345,6 +1429,15 @@ function App() {
                 <button type="button" className="secondary-button" onClick={() => void validateWorkspace()}>
                   Validate
                 </button>
+                {session.agentWorkspace.canonicalPath && !session.agentWorkspace.isGitRepo ? (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => void initializeGitWorkspace()}
+                  >
+                    Initialize git
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => void trustWorkspace()}
@@ -1766,10 +1859,15 @@ function App() {
                 <button
                   type="button"
                   onClick={() => void runAgentPlan()}
-                  disabled={!selectedAgentSessionId || !session.selectedModel || !runnableAgentPlan}
+                  disabled={!selectedAgentSessionId || !session.selectedModel || !runnableAgentPlan || isAgentRunning}
                 >
                   Run agent
                 </button>
+                {isAgentRunning ? (
+                  <button type="button" className="secondary-button" onClick={() => void cancelAgentRun()}>
+                    Cancel run
+                  </button>
+                ) : null}
               </div>
             </div>
           </div>

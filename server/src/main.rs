@@ -37,6 +37,7 @@ const LARGE_FILE_BYTES: u64 = 1024 * 1024;
 pub(crate) struct AppState {
     pub(crate) client: Client,
     pub(crate) ollama_base_url: String,
+    pub(crate) agent_runs: agent::AgentRunRegistry,
 }
 
 #[derive(Debug, Serialize)]
@@ -157,6 +158,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         client,
         ollama_base_url,
+        agent_runs: agent::AgentRunRegistry::default(),
     };
 
     let app = build_router(state);

@@ -143,5 +143,5 @@ export interface AgentPlanStep {
   id: string;
   title: string;
   detail: string;
-  status: string;
+  status: "pending" | "in_progress" | "completed" | "failed" | "cancelled";
 }

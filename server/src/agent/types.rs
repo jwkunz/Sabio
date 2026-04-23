@@ -167,6 +167,7 @@ pub enum AgentPlanStepStatus {
     InProgress,
     Completed,
     Failed,
+    Cancelled,
 }
 
 #[derive(Debug, Serialize)]
@@ -183,6 +184,12 @@ pub struct AgentWorkspaceStatus {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ValidateWorkspaceRequest {
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializeGitRequest {
     pub path: String,
 }
 
@@ -268,6 +275,23 @@ pub struct RunPlanRequest {
 pub struct RunPlanResponse {
     pub plan: AgentPlan,
     pub summary: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRunStatusResponse {
+    pub running: bool,
+    pub cancelled: bool,
+    pub run_id: Option<String>,
+    pub plan_id: Option<String>,
+    pub started_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelRunResponse {
+    pub cancelled: bool,
+    pub message: String,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,7 +1,14 @@
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+
 use axum::{http::StatusCode, Json};
+use chrono::Utc;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 use super::{
     storage,
@@ -11,11 +18,137 @@ use super::{
     },
     types::{
         AgentApiError, AgentApprovalStatus, AgentEventType, AgentPlan, AgentPlanStepStatus,
-        AgentSessionRecord, RunPlanResponse,
+        AgentRunStatusResponse, AgentSessionRecord, CancelRunResponse, RunPlanResponse,
     },
 };
 
 const MAX_STEP_ATTEMPTS: usize = 3;
+
+#[derive(Clone, Default)]
+pub struct AgentRunRegistry {
+    inner: Arc<Mutex<HashMap<String, AgentRunState>>>,
+}
+
+#[derive(Clone)]
+struct AgentRunState {
+    run_id: String,
+    plan_id: String,
+    started_at: i64,
+    cancelled: bool,
+}
+
+pub struct AgentRunLease {
+    registry: AgentRunRegistry,
+    session_id: String,
+    run_id: String,
+}
+
+impl AgentRunRegistry {
+    fn start_run(&self, session_id: &str, plan_id: &str) -> Result<AgentRunLease, String> {
+        let mut runs = self
+            .inner
+            .lock()
+            .map_err(|_| "Unable to lock agent run registry.".to_string())?;
+
+        if runs
+            .get(session_id)
+            .map(|state| !state.cancelled)
+            .unwrap_or(false)
+        {
+            return Err("An agent run is already active for this session.".to_string());
+        }
+
+        let run_id = Uuid::new_v4().to_string();
+        runs.insert(
+            session_id.to_string(),
+            AgentRunState {
+                run_id: run_id.clone(),
+                plan_id: plan_id.to_string(),
+                started_at: Utc::now().timestamp_millis(),
+                cancelled: false,
+            },
+        );
+
+        Ok(AgentRunLease {
+            registry: self.clone(),
+            session_id: session_id.to_string(),
+            run_id,
+        })
+    }
+
+    pub fn cancel_run(&self, session_id: &str) -> CancelRunResponse {
+        let Ok(mut runs) = self.inner.lock() else {
+            return CancelRunResponse {
+                cancelled: false,
+                message: "Unable to lock agent run registry.".to_string(),
+            };
+        };
+
+        if let Some(state) = runs.get_mut(session_id) {
+            state.cancelled = true;
+            return CancelRunResponse {
+                cancelled: true,
+                message: "Cancellation requested.".to_string(),
+            };
+        }
+
+        CancelRunResponse {
+            cancelled: false,
+            message: "No active run for this session.".to_string(),
+        }
+    }
+
+    pub fn status(&self, session_id: &str) -> AgentRunStatusResponse {
+        let Ok(runs) = self.inner.lock() else {
+            return AgentRunStatusResponse {
+                running: false,
+                cancelled: false,
+                run_id: None,
+                plan_id: None,
+                started_at: None,
+            };
+        };
+
+        if let Some(state) = runs.get(session_id) {
+            return AgentRunStatusResponse {
+                running: !state.cancelled,
+                cancelled: state.cancelled,
+                run_id: Some(state.run_id.clone()),
+                plan_id: Some(state.plan_id.clone()),
+                started_at: Some(state.started_at),
+            };
+        }
+
+        AgentRunStatusResponse {
+            running: false,
+            cancelled: false,
+            run_id: None,
+            plan_id: None,
+            started_at: None,
+        }
+    }
+}
+
+impl AgentRunLease {
+    fn is_cancelled(&self) -> bool {
+        self.registry.status(&self.session_id).cancelled
+    }
+}
+
+impl Drop for AgentRunLease {
+    fn drop(&mut self) {
+        if let Ok(mut runs) = self.registry.inner.lock() {
+            let should_remove = runs
+                .get(&self.session_id)
+                .map(|state| state.run_id == self.run_id)
+                .unwrap_or(false);
+
+            if should_remove {
+                runs.remove(&self.session_id);
+            }
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct OllamaGenerateResponse {
@@ -33,6 +166,7 @@ struct ModelStepAction {
 }
 
 pub async fn run_approved_plan(
+    registry: &AgentRunRegistry,
     client: &Client,
     ollama_base_url: &str,
     session_id: &str,
@@ -56,6 +190,9 @@ pub async fn run_approved_plan(
 
     ensure_plan_approved(&session, &plan)?;
     ensure_clean_worktree(&session.workspace_path)?;
+    let run_lease = registry
+        .start_run(session_id, &plan.id)
+        .map_err(|error| agent_error(StatusCode::CONFLICT, error))?;
     let mut summary_parts = Vec::new();
     let mut commit_hashes = Vec::new();
     let _ = storage::append_event(
@@ -70,6 +207,7 @@ pub async fn run_approved_plan(
     .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
 
     for step in plan.steps.clone() {
+        ensure_run_not_cancelled(session_id, &plan.id, &step.id, &run_lease)?;
         let _ = storage::update_plan_step_status(
             session_id,
             &plan.id,
@@ -88,6 +226,7 @@ pub async fn run_approved_plan(
             &step.id,
             &step.title,
             &step.detail,
+            &run_lease,
         )
         .await
         {
@@ -109,6 +248,7 @@ pub async fn run_approved_plan(
             .unwrap_or_else(|| format!("Completed plan step '{}'.", step.title));
         summary_parts.push(note.clone());
 
+        ensure_run_not_cancelled(session_id, &plan.id, &step.id, &run_lease)?;
         if workspace_has_changes(&session.workspace_path)? {
             let commit = execute_git_commit(
                 &session.workspace_path,
@@ -292,10 +432,12 @@ async fn run_step_with_retries(
     step_id: &str,
     step_title: &str,
     step_detail: &str,
+    run_lease: &AgentRunLease,
 ) -> Result<ModelStepAction, (StatusCode, Json<AgentApiError>)> {
     let mut last_diagnostic = String::new();
 
     for attempt in 1..=MAX_STEP_ATTEMPTS {
+        ensure_run_not_cancelled(session_id, &plan.id, step_id, run_lease)?;
         let action = match request_step_action(
             client,
             ollama_base_url,
@@ -326,6 +468,7 @@ async fn run_step_with_retries(
             }
         };
 
+        ensure_run_not_cancelled(session_id, &plan.id, step_id, run_lease)?;
         if !is_agent_loop_tool(&action.tool) {
             last_diagnostic = format!(
                 "Model requested unavailable tool '{}'.",
@@ -458,6 +601,35 @@ fn ensure_clean_worktree(workspace_path: &str) -> Result<(), (StatusCode, Json<A
     }
 
     Ok(())
+}
+
+fn ensure_run_not_cancelled(
+    session_id: &str,
+    plan_id: &str,
+    step_id: &str,
+    run_lease: &AgentRunLease,
+) -> Result<(), (StatusCode, Json<AgentApiError>)> {
+    if !run_lease.is_cancelled() {
+        return Ok(());
+    }
+
+    let _ = storage::update_plan_step_status(
+        session_id,
+        plan_id,
+        step_id,
+        AgentPlanStepStatus::Cancelled,
+    );
+    let _ = storage::append_event(
+        session_id,
+        AgentEventType::Cancelled,
+        json!({
+            "message": "Agent run cancelled by user.",
+            "planId": plan_id,
+            "stepId": step_id,
+        }),
+    );
+
+    Err(agent_error(StatusCode::CONFLICT, "Agent run cancelled."))
 }
 
 fn workspace_has_changes(workspace_path: &str) -> Result<bool, (StatusCode, Json<AgentApiError>)> {

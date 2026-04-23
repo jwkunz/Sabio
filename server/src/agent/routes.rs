@@ -29,8 +29,9 @@ use super::types::{
     AgentApiError, AgentApprovalKind, AgentApprovalsResponse, AgentCapability, AgentEventsResponse,
     AgentHealthResponse, AgentPlansResponse, AgentRouteStatus, AgentSessionRecord,
     AgentSessionSummary, AgentWorkspaceStatus, CreatePlanRequest, CreateSessionRequest,
-    ExecuteWriteToolRequest, GeneratePlanRequest, ListSessionsQuery, RenameSessionRequest,
-    ResolveApprovalRequest, RunPlanRequest, ValidateWorkspaceRequest, ValidateWorkspaceResponse,
+    ExecuteWriteToolRequest, GeneratePlanRequest, InitializeGitRequest, ListSessionsQuery,
+    RenameSessionRequest, ResolveApprovalRequest, RunPlanRequest, ValidateWorkspaceRequest,
+    ValidateWorkspaceResponse,
 };
 
 pub fn router() -> Router<AppState> {
@@ -59,6 +60,8 @@ pub fn router() -> Router<AppState> {
         )
         .route("/sessions/:session_id/plans/generate", post(generate_plan))
         .route("/sessions/:session_id/plans/:plan_id/run", post(run_plan))
+        .route("/sessions/:session_id/run/status", get(run_status))
+        .route("/sessions/:session_id/run/cancel", post(cancel_run))
         .route(
             "/sessions/:session_id/tools/execute-write",
             post(execute_write_tool_route),
@@ -74,6 +77,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/workspace", get(workspace_status))
         .route("/workspace/validate", post(validate_workspace))
+        .route("/workspace/init-git", post(initialize_git_workspace))
 }
 
 async fn health() -> Json<AgentHealthResponse> {
@@ -360,6 +364,7 @@ async fn run_plan(
     Json(request): Json<RunPlanRequest>,
 ) -> Result<Json<super::types::RunPlanResponse>, (StatusCode, Json<AgentApiError>)> {
     run_approved_plan(
+        &state.agent_runs,
         &state.client,
         &state.ollama_base_url,
         &session_id,
@@ -368,6 +373,20 @@ async fn run_plan(
     )
     .await
     .map(Json)
+}
+
+async fn run_status(
+    State(state): State<AppState>,
+    AxumPath(session_id): AxumPath<String>,
+) -> Json<super::types::AgentRunStatusResponse> {
+    Json(state.agent_runs.status(&session_id))
+}
+
+async fn cancel_run(
+    State(state): State<AppState>,
+    AxumPath(session_id): AxumPath<String>,
+) -> Json<super::types::CancelRunResponse> {
+    Json(state.agent_runs.cancel_run(&session_id))
 }
 
 async fn request_command_approval(
@@ -470,7 +489,44 @@ async fn workspace_status() -> Json<AgentWorkspaceStatus> {
 async fn validate_workspace(
     Json(request): Json<ValidateWorkspaceRequest>,
 ) -> Result<Json<ValidateWorkspaceResponse>, (StatusCode, Json<AgentApiError>)> {
-    let raw_path = request.path.trim();
+    inspect_workspace(&request.path).map(Json)
+}
+
+async fn initialize_git_workspace(
+    Json(request): Json<InitializeGitRequest>,
+) -> Result<Json<ValidateWorkspaceResponse>, (StatusCode, Json<AgentApiError>)> {
+    let canonical_path = canonical_workspace_path(&request.path)?;
+    let workspace = PathBuf::from(&canonical_path);
+    let current_status = inspect_workspace(&canonical_path)?;
+
+    if current_status.is_git_repo {
+        return Ok(Json(ValidateWorkspaceResponse {
+            message: "Workspace is already a git repository.".to_string(),
+            ..current_status
+        }));
+    }
+
+    run_git(&workspace, &["init"]).map_err(|error| {
+        agent_error(
+            StatusCode::BAD_REQUEST,
+            format!("Unable to initialize git repository: {error}"),
+        )
+    })?;
+
+    let mut initialized = inspect_workspace(&canonical_path)?;
+    initialized.message = if initialized.clean_worktree == Some(true) {
+        "Git repository initialized and ready to trust.".to_string()
+    } else {
+        "Git repository initialized. Commit existing files before trust.".to_string()
+    };
+
+    Ok(Json(initialized))
+}
+
+fn inspect_workspace(
+    path: &str,
+) -> Result<ValidateWorkspaceResponse, (StatusCode, Json<AgentApiError>)> {
+    let raw_path = path.trim();
 
     if raw_path.is_empty() {
         return Err(agent_error(
@@ -526,14 +582,14 @@ async fn validate_workspace(
         "Workspace is ready to trust.".to_string()
     };
 
-    Ok(Json(ValidateWorkspaceResponse {
+    Ok(ValidateWorkspaceResponse {
         canonical_path: canonical_path.to_string_lossy().to_string(),
         is_git_repo,
         git_branch,
         clean_worktree,
         trusted: false,
         message,
-    }))
+    })
 }
 
 fn run_git(workspace: &PathBuf, args: &[&str]) -> Result<String, String> {
