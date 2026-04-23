@@ -17,8 +17,8 @@ use serde_json::json;
 
 use super::storage;
 use super::tools::{
-    execute_read_only_tool, tool_specs, validate_tool_call, ToolCallValidationRequest,
-    ToolExecutionRequest,
+    execute_command, execute_read_only_tool, tool_specs, validate_tool_call,
+    CommandExecutionRequest, ToolCallValidationRequest, ToolExecutionRequest,
 };
 use super::types::{
     AgentApiError, AgentCapability, AgentEventsResponse, AgentHealthResponse, AgentRouteStatus,
@@ -39,6 +39,7 @@ where
             "/tools/execute-read-only",
             post(execute_read_only_tool_route),
         )
+        .route("/commands/execute", post(execute_command_route))
         .route("/sessions", get(sessions).post(create_session))
         .route("/sessions/:session_id", get(session))
         .route("/sessions/:session_id/rename", post(rename_session))
@@ -87,6 +88,12 @@ async fn execute_read_only_tool_route(
     Json(request): Json<ToolExecutionRequest>,
 ) -> Json<super::tools::ToolExecutionResponse> {
     Json(execute_read_only_tool(request))
+}
+
+async fn execute_command_route(
+    Json(request): Json<CommandExecutionRequest>,
+) -> Json<super::tools::CommandExecutionResponse> {
+    Json(execute_command(request).await)
 }
 
 async fn sessions(

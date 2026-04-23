@@ -1633,6 +1633,15 @@ function App() {
               <p className="empty-state">No command output yet.</p>
             </section>
             <section className="settings-card">
+              <h3>Command Policy</h3>
+              <div className="policy-list">
+                <span>Direct executable plus args only</span>
+                <span>Workspace-contained cwd required</span>
+                <span>Network and destructive commands require approval</span>
+                <span>Shell and privileged commands are blocked</span>
+              </div>
+            </section>
+            <section className="settings-card">
               <h3>Tools</h3>
               {agentTools.length === 0 ? (
                 <p className="empty-state">No tools loaded.</p>

@@ -2,15 +2,21 @@ use std::{
     fs,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio::process::Command as TokioCommand;
+use tokio::time::timeout;
 
 const MAX_READ_BYTES: u64 = 256 * 1024;
 const MAX_LIST_ENTRIES: usize = 500;
 const MAX_SEARCH_MATCHES: usize = 200;
 const MAX_SEARCH_FILE_BYTES: u64 = 512 * 1024;
+const DEFAULT_COMMAND_TIMEOUT_SECONDS: u64 = 30;
+const MAX_COMMAND_TIMEOUT_SECONDS: u64 = 300;
+const MAX_COMMAND_OUTPUT_CHARS: usize = 80_000;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +35,17 @@ pub struct ToolExecutionRequest {
     pub args: Value,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecutionRequest {
+    pub workspace_path: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    pub cwd: String,
+    pub timeout_seconds: Option<u64>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallValidationResponse {
@@ -44,6 +61,29 @@ pub struct ToolExecutionResponse {
     pub tool: AgentToolName,
     pub payload: Value,
     pub errors: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecutionResponse {
+    pub ok: bool,
+    pub classification: CommandClassification,
+    pub approval_required: bool,
+    pub blocked: bool,
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub timed_out: bool,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandClassification {
+    Autonomous,
+    NetworkApprovalRequired,
+    DestructiveApprovalRequired,
+    Blocked,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -211,6 +251,183 @@ pub fn execute_read_only_tool(request: ToolExecutionRequest) -> ToolExecutionRes
             errors: vec![error],
         },
     }
+}
+
+pub async fn execute_command(request: CommandExecutionRequest) -> CommandExecutionResponse {
+    let errors = validate_command_request(&request);
+
+    if !errors.is_empty() {
+        return command_response(
+            CommandClassification::Blocked,
+            true,
+            None,
+            String::new(),
+            String::new(),
+            false,
+            errors,
+        );
+    }
+
+    let classification = classify_command(&request.command, &request.args);
+
+    if classification == CommandClassification::Blocked {
+        return command_response(
+            classification,
+            true,
+            None,
+            String::new(),
+            String::new(),
+            false,
+            vec!["Command is blocked by Sabio policy.".to_string()],
+        );
+    }
+
+    if classification != CommandClassification::Autonomous {
+        return command_response(
+            classification,
+            true,
+            None,
+            String::new(),
+            String::new(),
+            false,
+            vec!["Command requires approval before execution.".to_string()],
+        );
+    }
+
+    let workspace_root = match canonical_workspace_root(&request.workspace_path) {
+        Ok(path) => path,
+        Err(error) => {
+            return command_response(
+                CommandClassification::Blocked,
+                true,
+                None,
+                String::new(),
+                String::new(),
+                false,
+                vec![error],
+            );
+        }
+    };
+    let cwd = match contained_existing_path(&workspace_root, &request.cwd) {
+        Ok(path) => path,
+        Err(error) => {
+            return command_response(
+                CommandClassification::Blocked,
+                true,
+                None,
+                String::new(),
+                String::new(),
+                false,
+                vec![error],
+            );
+        }
+    };
+
+    if !cwd.is_dir() {
+        return command_response(
+            CommandClassification::Blocked,
+            true,
+            None,
+            String::new(),
+            String::new(),
+            false,
+            vec!["cwd must be a directory.".to_string()],
+        );
+    }
+
+    let timeout_seconds = request
+        .timeout_seconds
+        .unwrap_or(DEFAULT_COMMAND_TIMEOUT_SECONDS)
+        .min(MAX_COMMAND_TIMEOUT_SECONDS);
+
+    let child = match TokioCommand::new(&request.command)
+        .args(&request.args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            return command_response(
+                classification,
+                false,
+                None,
+                String::new(),
+                String::new(),
+                false,
+                vec![format!("Unable to spawn command: {error}")],
+            );
+        }
+    };
+
+    match timeout(
+        Duration::from_secs(timeout_seconds),
+        child.wait_with_output(),
+    )
+    .await
+    {
+        Ok(Ok(output)) => command_response(
+            classification,
+            false,
+            output.status.code(),
+            capped_output(&String::from_utf8_lossy(&output.stdout)),
+            capped_output(&String::from_utf8_lossy(&output.stderr)),
+            false,
+            Vec::new(),
+        ),
+        Ok(Err(error)) => command_response(
+            classification,
+            false,
+            None,
+            String::new(),
+            String::new(),
+            false,
+            vec![format!("Command failed while waiting for output: {error}")],
+        ),
+        Err(_) => command_response(
+            classification,
+            false,
+            None,
+            String::new(),
+            String::new(),
+            true,
+            vec![format!(
+                "Command timed out after {timeout_seconds} seconds."
+            )],
+        ),
+    }
+}
+
+pub fn classify_command(command: &str, args: &[String]) -> CommandClassification {
+    let executable = Path::new(command)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(command)
+        .to_ascii_lowercase();
+
+    if is_shell_command(&executable)
+        || command.contains(['|', '&', ';', '>', '<', '\n'])
+        || args.iter().any(|arg| arg.contains('\0'))
+    {
+        return CommandClassification::Blocked;
+    }
+
+    if is_privileged_command(&executable) {
+        return CommandClassification::Blocked;
+    }
+
+    if is_destructive_command(&executable, args) {
+        return CommandClassification::DestructiveApprovalRequired;
+    }
+
+    if is_network_command(&executable, args) {
+        return CommandClassification::NetworkApprovalRequired;
+    }
+
+    CommandClassification::Autonomous
 }
 
 fn execute_list_files(workspace_root: &Path, args: &Value) -> Result<Value, String> {
@@ -431,6 +648,152 @@ fn require_arg<'a>(args: &'a Value, name: &str) -> Result<&'a str, String> {
         .filter(|value| !value.trim().is_empty())
         .map(str::trim)
         .ok_or_else(|| format!("{name} is required."))
+}
+
+fn validate_command_request(request: &CommandExecutionRequest) -> Vec<String> {
+    let mut errors = Vec::new();
+
+    if request.command.trim().is_empty() {
+        errors.push("command is required.".to_string());
+    }
+
+    if request.cwd.trim().is_empty() {
+        errors.push("cwd is required.".to_string());
+    }
+
+    if request.command.contains('/') || request.command.contains('\\') {
+        errors.push("command must be an executable name, not a path.".to_string());
+    }
+
+    if request.command.contains('\0') || request.cwd.contains('\0') {
+        errors.push("command and cwd must not contain NUL bytes.".to_string());
+    }
+
+    if request.timeout_seconds == Some(0) {
+        errors.push("timeoutSeconds must be greater than zero.".to_string());
+    }
+
+    errors
+}
+
+fn command_response(
+    classification: CommandClassification,
+    blocked: bool,
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    timed_out: bool,
+    errors: Vec<String>,
+) -> CommandExecutionResponse {
+    let approval_required = matches!(
+        classification,
+        CommandClassification::NetworkApprovalRequired
+            | CommandClassification::DestructiveApprovalRequired
+    );
+    let ok =
+        errors.is_empty() && !blocked && !approval_required && !timed_out && exit_code == Some(0);
+
+    CommandExecutionResponse {
+        ok,
+        classification,
+        approval_required,
+        blocked,
+        exit_code,
+        stdout,
+        stderr,
+        timed_out,
+        errors,
+    }
+}
+
+fn capped_output(output: &str) -> String {
+    if output.chars().count() <= MAX_COMMAND_OUTPUT_CHARS {
+        return output.to_string();
+    }
+
+    let mut capped = output
+        .chars()
+        .take(MAX_COMMAND_OUTPUT_CHARS)
+        .collect::<String>();
+    capped.push_str("\n[Sabio truncated command output]");
+    capped
+}
+
+fn is_shell_command(command: &str) -> bool {
+    matches!(
+        command,
+        "sh" | "bash" | "zsh" | "fish" | "cmd" | "powershell" | "pwsh"
+    )
+}
+
+fn is_privileged_command(command: &str) -> bool {
+    matches!(
+        command,
+        "sudo"
+            | "su"
+            | "doas"
+            | "chmod"
+            | "chown"
+            | "mount"
+            | "umount"
+            | "systemctl"
+            | "service"
+            | "launchctl"
+            | "reg"
+            | "sc"
+    )
+}
+
+fn is_destructive_command(command: &str, args: &[String]) -> bool {
+    if matches!(command, "rm" | "rmdir" | "del" | "erase" | "move" | "mv") {
+        return true;
+    }
+
+    if command == "git" {
+        return args.iter().any(|arg| {
+            matches!(
+                arg.as_str(),
+                "reset" | "clean" | "checkout" | "restore" | "rebase"
+            )
+        });
+    }
+
+    if command == "cargo" {
+        return args.iter().any(|arg| arg == "clean");
+    }
+
+    false
+}
+
+fn is_network_command(command: &str, args: &[String]) -> bool {
+    if matches!(
+        command,
+        "curl" | "wget" | "ssh" | "scp" | "sftp" | "ftp" | "gh"
+    ) {
+        return true;
+    }
+
+    match command {
+        "npm" | "pnpm" | "yarn" | "bun" => args.iter().any(|arg| {
+            matches!(
+                arg.as_str(),
+                "install" | "add" | "update" | "upgrade" | "dlx" | "create"
+            )
+        }),
+        "cargo" => args.iter().any(|arg| {
+            matches!(
+                arg.as_str(),
+                "fetch" | "install" | "update" | "publish" | "search"
+            )
+        }),
+        "pip" | "pip3" | "python" | "python3" => args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "install" | "download")),
+        "git" => args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "fetch" | "pull" | "push" | "clone")),
+        _ => false,
+    }
 }
 
 fn validate_command_args(args: &Value, errors: &mut Vec<String>) {

@@ -778,6 +778,22 @@ button:disabled {
   gap: 0.65rem;
 }
 
+.policy-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.policy-list span {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--control-bg);
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+  padding: 0.65rem 0.75rem;
+}
+
 .agent-tool-row {
   border: 1px solid var(--border);
   border-radius: 14px;
