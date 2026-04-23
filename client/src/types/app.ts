@@ -106,3 +106,9 @@ export interface AgentEvent {
   payload: Record<string, unknown>;
   parentEventId?: string | null;
 }
+
+export interface AgentToolSpec {
+  name: string;
+  description: string;
+  requiredArgs: string[];
+}

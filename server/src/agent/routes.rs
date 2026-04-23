@@ -16,7 +16,10 @@ use futures_util::Stream;
 use serde_json::json;
 
 use super::storage;
-use super::tools::{tool_specs, validate_tool_call, ToolCallValidationRequest};
+use super::tools::{
+    execute_read_only_tool, tool_specs, validate_tool_call, ToolCallValidationRequest,
+    ToolExecutionRequest,
+};
 use super::types::{
     AgentApiError, AgentCapability, AgentEventsResponse, AgentHealthResponse, AgentRouteStatus,
     AgentSessionRecord, AgentSessionSummary, AgentWorkspaceStatus, CreateSessionRequest,
@@ -32,6 +35,10 @@ where
         .route("/capabilities", get(capabilities))
         .route("/tools", get(tools))
         .route("/tools/validate", post(validate_tool))
+        .route(
+            "/tools/execute-read-only",
+            post(execute_read_only_tool_route),
+        )
         .route("/sessions", get(sessions).post(create_session))
         .route("/sessions/:session_id", get(session))
         .route("/sessions/:session_id/rename", post(rename_session))
@@ -74,6 +81,12 @@ async fn validate_tool(
     Json(request): Json<ToolCallValidationRequest>,
 ) -> Json<super::tools::ToolCallValidationResponse> {
     Json(validate_tool_call(request))
+}
+
+async fn execute_read_only_tool_route(
+    Json(request): Json<ToolExecutionRequest>,
+) -> Json<super::tools::ToolExecutionResponse> {
+    Json(execute_read_only_tool(request))
 }
 
 async fn sessions(

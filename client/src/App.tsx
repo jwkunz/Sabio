@@ -30,6 +30,7 @@ import type {
   AppMode,
   AgentEvent,
   AgentSessionSummary,
+  AgentToolSpec,
   DisplayFontSize,
   DisplayTheme,
   Message,
@@ -125,6 +126,7 @@ function App() {
   const [selectedAgentSessionId, setSelectedAgentSessionId] = useState("");
   const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
   const [agentSessionStatus, setAgentSessionStatus] = useState("");
+  const [agentTools, setAgentTools] = useState<AgentToolSpec[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ startX: number; widths: PaneWidths; handle: "left" | "right" } | null>(null);
@@ -285,6 +287,14 @@ function App() {
 
     void loadAgentSessions(session.agentWorkspace.canonicalPath);
   }, [isHydrated, session.appMode, session.agentWorkspace.canonicalPath]);
+
+  useEffect(() => {
+    if (!isHydrated || session.appMode !== "agent") {
+      return;
+    }
+
+    void loadAgentTools();
+  }, [isHydrated, session.appMode]);
 
   useEffect(() => {
     if (!selectedAgentSessionId) {
@@ -774,6 +784,21 @@ function App() {
       }
     } catch (sessionError) {
       setAgentSessionStatus((sessionError as Error).message || "Unable to load agent sessions.");
+    }
+  };
+
+  const loadAgentTools = async () => {
+    try {
+      const response = await fetch("/api/agent/tools");
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Unable to load agent tools.");
+      }
+
+      setAgentTools((await response.json()) as AgentToolSpec[]);
+    } catch (toolError) {
+      setAgentSessionStatus((toolError as Error).message || "Unable to load agent tools.");
     }
   };
 
@@ -1606,6 +1631,21 @@ function App() {
             <section className="settings-card">
               <h3>Command Log</h3>
               <p className="empty-state">No command output yet.</p>
+            </section>
+            <section className="settings-card">
+              <h3>Tools</h3>
+              {agentTools.length === 0 ? (
+                <p className="empty-state">No tools loaded.</p>
+              ) : (
+                <div className="agent-tool-list">
+                  {agentTools.map((tool) => (
+                    <article className="agent-tool-row" key={tool.name}>
+                      <strong>{formatAgentEventType(tool.name)}</strong>
+                      <span>{tool.description}</span>
+                    </article>
+                  ))}
+                </div>
+              )}
             </section>
             <section className="settings-card">
               <h3>Diff</h3>

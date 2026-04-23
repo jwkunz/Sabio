@@ -772,6 +772,31 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.agent-tool-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.agent-tool-row {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--control-bg);
+  padding: 0.75rem;
+}
+
+.agent-tool-row strong,
+.agent-tool-row span {
+  display: block;
+}
+
+.agent-tool-row span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  margin-top: 0.25rem;
+}
+
 .agent-composer textarea {
   min-height: 96px;
 }
