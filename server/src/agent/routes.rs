@@ -1,14 +1,19 @@
 use std::{
+    convert::Infallible,
     path::PathBuf,
     process::{Command, Stdio},
 };
 
+use async_stream::stream;
 use axum::{
     extract::{Path as AxumPath, Query},
     http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
     Json, Router,
 };
+use futures_util::Stream;
+use serde_json::json;
 
 use super::storage;
 use super::types::{
@@ -28,6 +33,10 @@ where
         .route("/sessions/:session_id", get(session))
         .route("/sessions/:session_id/rename", post(rename_session))
         .route("/sessions/:session_id/events", get(session_events))
+        .route(
+            "/sessions/:session_id/events/stream",
+            get(session_event_stream),
+        )
         .route("/workspace", get(workspace_status))
         .route("/workspace/validate", post(validate_workspace))
 }
@@ -113,6 +122,32 @@ async fn session_events(
     Ok(Json(AgentEventsResponse {
         events: session.event_log,
     }))
+}
+
+async fn session_event_stream(
+    AxumPath(session_id): AxumPath<String>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, Json<AgentApiError>)> {
+    let session = storage::get_session(&session_id)
+        .map_err(|error| agent_error(StatusCode::NOT_FOUND, error))?;
+
+    let event_stream = stream! {
+        for event in session.event_log {
+            yield Ok(Event::default().data(json!(event).to_string()));
+        }
+
+        yield Ok(Event::default().data(json!({
+            "id": format!("{}-replay-finished", session_id),
+            "sessionId": session_id,
+            "timestamp": chrono::Utc::now().timestamp_millis(),
+            "type": "session_finished",
+            "payload": {
+                "message": "Stored event replay finished."
+            },
+            "parentEventId": null
+        }).to_string()));
+    };
+
+    Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()))
 }
 
 async fn workspace_status() -> Json<AgentWorkspaceStatus> {
