@@ -1,3 +1,4 @@
+mod agent_loop;
 mod routes;
 mod storage;
 mod tools;

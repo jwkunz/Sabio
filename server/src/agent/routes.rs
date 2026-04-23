@@ -18,6 +18,7 @@ use serde_json::json;
 
 use crate::AppState;
 
+use super::agent_loop::run_approved_plan;
 use super::storage;
 use super::tools::{
     execute_command, execute_git_commit, execute_read_only_tool, execute_write_tool,
@@ -29,7 +30,7 @@ use super::types::{
     AgentHealthResponse, AgentPlansResponse, AgentRouteStatus, AgentSessionRecord,
     AgentSessionSummary, AgentWorkspaceStatus, CreatePlanRequest, CreateSessionRequest,
     ExecuteWriteToolRequest, GeneratePlanRequest, ListSessionsQuery, RenameSessionRequest,
-    ResolveApprovalRequest, ValidateWorkspaceRequest, ValidateWorkspaceResponse,
+    ResolveApprovalRequest, RunPlanRequest, ValidateWorkspaceRequest, ValidateWorkspaceResponse,
 };
 
 pub fn router() -> Router<AppState> {
@@ -57,6 +58,7 @@ pub fn router() -> Router<AppState> {
             get(session_plans).post(create_plan),
         )
         .route("/sessions/:session_id/plans/generate", post(generate_plan))
+        .route("/sessions/:session_id/plans/:plan_id/run", post(run_plan))
         .route(
             "/sessions/:session_id/tools/execute-write",
             post(execute_write_tool_route),
@@ -350,6 +352,22 @@ async fn generate_plan(
     storage::create_plan(&session_id, title, summary, steps)
         .map(Json)
         .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))
+}
+
+async fn run_plan(
+    State(state): State<AppState>,
+    AxumPath((session_id, plan_id)): AxumPath<(String, String)>,
+    Json(request): Json<RunPlanRequest>,
+) -> Result<Json<super::types::RunPlanResponse>, (StatusCode, Json<AgentApiError>)> {
+    run_approved_plan(
+        &state.client,
+        &state.ollama_base_url,
+        &session_id,
+        &plan_id,
+        &request.model,
+    )
+    .await
+    .map(Json)
 }
 
 async fn request_command_approval(

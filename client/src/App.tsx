@@ -155,6 +155,15 @@ function App() {
     () => agentSessions.find((agentSession) => agentSession.id === selectedAgentSessionId) ?? null,
     [agentSessions, selectedAgentSessionId]
   );
+  const runnableAgentPlan = useMemo(
+    () =>
+      agentPlans.find((plan) => {
+        const approval = agentApprovals.find((entry) => entry.id === plan.approvalId);
+        const hasRemainingSteps = plan.steps.some((step) => step.status !== "completed");
+        return approval?.status === "approved" && hasRemainingSteps;
+      }) ?? null,
+    [agentApprovals, agentPlans]
+  );
 
   const loadModelOptions = async () => {
     setModelStatus("Loading models...");
@@ -966,6 +975,62 @@ function App() {
     }
   };
 
+  const runAgentPlan = async () => {
+    if (!selectedAgentSessionId) {
+      setAgentSessionStatus("Select an agent session before running a plan.");
+      return;
+    }
+
+    if (!session.selectedModel) {
+      setAgentSessionStatus("Select an Ollama model before running the agent.");
+      return;
+    }
+
+    if (!runnableAgentPlan) {
+      setAgentSessionStatus("Approve a plan before running the agent.");
+      return;
+    }
+
+    setAgentSessionStatus(`Running approved plan: ${runnableAgentPlan.title}`);
+
+    try {
+      const response = await fetch(
+        `/api/agent/sessions/${encodeURIComponent(selectedAgentSessionId)}/plans/${encodeURIComponent(
+          runnableAgentPlan.id
+        )}/run`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: session.selectedModel
+          })
+        }
+      );
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Unable to run agent plan.");
+      }
+
+      const payload = (await response.json()) as { summary: string };
+      await Promise.all([
+        loadAgentPlans(selectedAgentSessionId),
+        loadAgentApprovals(selectedAgentSessionId),
+        loadAgentEvents(selectedAgentSessionId)
+      ]);
+      setAgentSessionStatus(payload.summary || "Approved plan run completed.");
+    } catch (runError) {
+      setAgentSessionStatus((runError as Error).message || "Unable to run agent plan.");
+      await Promise.all([
+        loadAgentPlans(selectedAgentSessionId),
+        loadAgentApprovals(selectedAgentSessionId),
+        loadAgentEvents(selectedAgentSessionId)
+      ]);
+    }
+  };
+
   const resolveAgentApproval = async (approvalId: string, approved: boolean) => {
     if (!selectedAgentSessionId) {
       return;
@@ -1578,6 +1643,7 @@ function App() {
                         {plan.steps.map((step) => (
                           <li key={step.id}>
                             <strong>{step.title}</strong>
+                            <span className="agent-step-status">{formatAgentEventType(step.status)}</span>
                             {step.detail ? <span>{step.detail}</span> : null}
                           </li>
                         ))}
@@ -1697,7 +1763,11 @@ function App() {
                 >
                   Generate plan
                 </button>
-                <button type="button" disabled>
+                <button
+                  type="button"
+                  onClick={() => void runAgentPlan()}
+                  disabled={!selectedAgentSessionId || !session.selectedModel || !runnableAgentPlan}
+                >
                   Run agent
                 </button>
               </div>

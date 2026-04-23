@@ -270,6 +270,48 @@ pub fn list_plans(session_id: &str) -> Result<Vec<AgentPlan>, String> {
     Ok(get_session(session_id)?.plans)
 }
 
+pub fn update_plan_step_status(
+    session_id: &str,
+    plan_id: &str,
+    step_id: &str,
+    status: AgentPlanStepStatus,
+) -> Result<AgentPlan, String> {
+    let mut session = get_session(session_id)?;
+    let mut updated_plan = None;
+
+    for plan in &mut session.plans {
+        if plan.id != plan_id {
+            continue;
+        }
+
+        let step = plan
+            .steps
+            .iter_mut()
+            .find(|step| step.id == step_id)
+            .ok_or_else(|| "Plan step not found.".to_string())?;
+        step.status = status.clone();
+        updated_plan = Some(plan.clone());
+        break;
+    }
+
+    let updated_plan = updated_plan.ok_or_else(|| "Plan not found.".to_string())?;
+    let payload = serde_json::to_value(&updated_plan).map_err(|error| error.to_string())?;
+
+    let _ = push_event(
+        &mut session,
+        AgentEventType::PlanUpdated,
+        json!({
+            "message": "Plan step status updated.",
+            "plan": payload,
+            "stepId": step_id,
+            "status": status,
+        }),
+        None,
+    )?;
+    write_session(&session)?;
+    Ok(updated_plan)
+}
+
 pub fn append_event(
     session_id: &str,
     event_type: AgentEventType,

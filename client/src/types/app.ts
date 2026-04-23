@@ -88,6 +88,7 @@ export type AgentEventType =
   | "session_started"
   | "assistant_message_delta"
   | "plan_created"
+  | "plan_updated"
   | "approval_requested"
   | "approval_resolved"
   | "tool_started"

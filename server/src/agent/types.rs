@@ -95,6 +95,7 @@ pub enum AgentEventType {
     SessionStarted,
     AssistantMessageDelta,
     PlanCreated,
+    PlanUpdated,
     ApprovalRequested,
     ApprovalResolved,
     ToolStarted,
@@ -254,6 +255,19 @@ pub struct CreatePlanStepRequest {
 pub struct GeneratePlanRequest {
     pub model: String,
     pub task: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunPlanRequest {
+    pub model: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunPlanResponse {
+    pub plan: AgentPlan,
+    pub summary: String,
 }
 
 #[derive(Debug, Deserialize)]
