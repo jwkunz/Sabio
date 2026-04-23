@@ -5,7 +5,10 @@ use serde_json::{json, Value};
 
 use super::{
     storage,
-    tools::{execute_read_only_tool, execute_write_tool, AgentToolName, ToolExecutionRequest},
+    tools::{
+        execute_git_commit, execute_read_only_tool, execute_write_tool, AgentToolName,
+        GitCommitRequest, ToolExecutionRequest,
+    },
     types::{
         AgentApiError, AgentApprovalStatus, AgentEventType, AgentPlan, AgentPlanStepStatus,
         AgentSessionRecord, RunPlanResponse,
@@ -50,7 +53,9 @@ pub async fn run_approved_plan(
         .ok_or_else(|| agent_error(StatusCode::NOT_FOUND, "Plan not found."))?;
 
     ensure_plan_approved(&session, &plan)?;
+    ensure_clean_worktree(&session.workspace_path)?;
     let mut summary_parts = Vec::new();
+    let mut commit_hashes = Vec::new();
     let _ = storage::append_event(
         session_id,
         AgentEventType::ToolStarted,
@@ -171,6 +176,58 @@ pub async fn run_approved_plan(
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| format!("Completed plan step '{}'.", step.title));
         summary_parts.push(note.clone());
+
+        if workspace_has_changes(&session.workspace_path)? {
+            let commit = execute_git_commit(
+                &session.workspace_path,
+                GitCommitRequest {
+                    message: step_commit_message(&step.title),
+                },
+            );
+
+            if !commit.ok {
+                let _ = storage::update_plan_step_status(
+                    session_id,
+                    &plan.id,
+                    &step.id,
+                    AgentPlanStepStatus::Failed,
+                );
+                let _ = storage::append_event(
+                    session_id,
+                    AgentEventType::Error,
+                    json!({
+                        "message": "Unable to commit completed plan step.",
+                        "stepId": step.id,
+                        "stdout": commit.stdout,
+                        "stderr": commit.stderr,
+                        "errors": commit.errors,
+                    }),
+                );
+                return Err(agent_error(
+                    StatusCode::BAD_REQUEST,
+                    "Unable to commit completed plan step.",
+                ));
+            }
+
+            let commit_hash = commit.commit_hash.clone();
+            let _ = storage::append_event(
+                session_id,
+                AgentEventType::GitCommitCreated,
+                json!({
+                    "stepId": step.id,
+                    "commitHash": commit.commit_hash,
+                    "stdout": commit.stdout,
+                    "stderr": commit.stderr,
+                }),
+            )
+            .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
+
+            if let Some(hash) = commit_hash {
+                commit_hashes.push(hash.clone());
+                summary_parts.push(format!("Committed step as {hash}."));
+            }
+        }
+
         let _ = storage::append_event(
             session_id,
             AgentEventType::AssistantMessageDelta,
@@ -201,6 +258,7 @@ pub async fn run_approved_plan(
         json!({
             "planId": plan.id,
             "summary": summary,
+            "commitHashes": commit_hashes,
         }),
     )
     .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
@@ -318,6 +376,45 @@ fn ensure_plan_approved(
     Ok(())
 }
 
+fn ensure_clean_worktree(workspace_path: &str) -> Result<(), (StatusCode, Json<AgentApiError>)> {
+    if workspace_has_changes(workspace_path)? {
+        return Err(agent_error(
+            StatusCode::CONFLICT,
+            "Workspace must be clean before running an approved plan.",
+        ));
+    }
+
+    Ok(())
+}
+
+fn workspace_has_changes(workspace_path: &str) -> Result<bool, (StatusCode, Json<AgentApiError>)> {
+    let output = execute_read_only_tool(ToolExecutionRequest {
+        workspace_path: workspace_path.to_string(),
+        tool: AgentToolName::GitStatus,
+        args: json!({}),
+    });
+
+    if !output.ok {
+        return Err(agent_error(
+            StatusCode::BAD_REQUEST,
+            output
+                .errors
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "Unable to read git status.".to_string()),
+        ));
+    }
+
+    let stdout = output
+        .payload
+        .get("stdout")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    Ok(stdout
+        .lines()
+        .any(|line| !line.trim().is_empty() && !line.starts_with("##")))
+}
+
 fn execute_step_tool(request: ToolExecutionRequest) -> super::tools::ToolExecutionResponse {
     if is_write_tool(&request.tool) {
         execute_write_tool(request)
@@ -341,6 +438,22 @@ fn is_agent_loop_tool(tool: &AgentToolName) -> bool {
 
 fn is_write_tool(tool: &AgentToolName) -> bool {
     matches!(tool, AgentToolName::WriteFile | AgentToolName::ApplyPatch)
+}
+
+fn step_commit_message(step_title: &str) -> String {
+    let title = step_title
+        .lines()
+        .next()
+        .unwrap_or("completed plan step")
+        .trim();
+    let title = if title.is_empty() {
+        "completed plan step"
+    } else {
+        title
+    };
+    let title: String = title.chars().take(80).collect();
+
+    format!("sabio(agent): {title}")
 }
 
 fn extract_json_object(raw: &str) -> Option<String> {
