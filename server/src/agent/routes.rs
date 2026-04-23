@@ -4,14 +4,17 @@ use std::{
 };
 
 use axum::{
+    extract::{Path as AxumPath, Query},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
 };
 
+use super::storage;
 use super::types::{
-    AgentApiError, AgentCapability, AgentHealthResponse, AgentRouteStatus, AgentSessionSummary,
-    AgentWorkspaceStatus, ValidateWorkspaceRequest, ValidateWorkspaceResponse,
+    AgentApiError, AgentCapability, AgentEventsResponse, AgentHealthResponse, AgentRouteStatus,
+    AgentSessionRecord, AgentSessionSummary, AgentWorkspaceStatus, CreateSessionRequest,
+    ListSessionsQuery, RenameSessionRequest, ValidateWorkspaceRequest, ValidateWorkspaceResponse,
 };
 
 pub fn router<S>() -> Router<S>
@@ -21,7 +24,10 @@ where
     Router::new()
         .route("/health", get(health))
         .route("/capabilities", get(capabilities))
-        .route("/sessions", get(sessions))
+        .route("/sessions", get(sessions).post(create_session))
+        .route("/sessions/:session_id", get(session))
+        .route("/sessions/:session_id/rename", post(rename_session))
+        .route("/sessions/:session_id/events", get(session_events))
         .route("/workspace", get(workspace_status))
         .route("/workspace/validate", post(validate_workspace))
 }
@@ -30,7 +36,8 @@ async fn health() -> Json<AgentHealthResponse> {
     Json(AgentHealthResponse {
         ok: true,
         status: AgentRouteStatus::Stub,
-        message: "Agent Mode backend routes are installed. Execution is not enabled yet.".to_string(),
+        message: "Agent Mode backend routes are installed. Execution is not enabled yet."
+            .to_string(),
     })
 }
 
@@ -47,8 +54,65 @@ async fn capabilities() -> Json<Vec<AgentCapability>> {
     ])
 }
 
-async fn sessions() -> Json<Vec<AgentSessionSummary>> {
-    Json(Vec::new())
+async fn sessions(
+    Query(query): Query<ListSessionsQuery>,
+) -> Result<Json<Vec<AgentSessionSummary>>, (StatusCode, Json<AgentApiError>)> {
+    let workspace_filter = query
+        .workspace_path
+        .as_deref()
+        .map(canonical_workspace_path)
+        .transpose()?;
+    let sessions = storage::list_sessions()
+        .map_err(|error| agent_error(StatusCode::INTERNAL_SERVER_ERROR, error))?
+        .into_iter()
+        .filter(|session| {
+            workspace_filter
+                .as_ref()
+                .map(|workspace| session.workspace_path == *workspace)
+                .unwrap_or(true)
+        })
+        .map(|session| session.summary())
+        .collect();
+
+    Ok(Json(sessions))
+}
+
+async fn create_session(
+    Json(request): Json<CreateSessionRequest>,
+) -> Result<Json<AgentSessionRecord>, (StatusCode, Json<AgentApiError>)> {
+    let canonical_path = canonical_workspace_path(&request.workspace_path)?;
+    let session = storage::create_session(canonical_path, request.title, request.git_branch)
+        .map_err(|error| agent_error(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+
+    Ok(Json(session))
+}
+
+async fn session(
+    AxumPath(session_id): AxumPath<String>,
+) -> Result<Json<AgentSessionRecord>, (StatusCode, Json<AgentApiError>)> {
+    storage::get_session(&session_id)
+        .map(Json)
+        .map_err(|error| agent_error(StatusCode::NOT_FOUND, error))
+}
+
+async fn rename_session(
+    AxumPath(session_id): AxumPath<String>,
+    Json(request): Json<RenameSessionRequest>,
+) -> Result<Json<AgentSessionRecord>, (StatusCode, Json<AgentApiError>)> {
+    storage::rename_session(&session_id, request.title)
+        .map(Json)
+        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))
+}
+
+async fn session_events(
+    AxumPath(session_id): AxumPath<String>,
+) -> Result<Json<AgentEventsResponse>, (StatusCode, Json<AgentApiError>)> {
+    let session = storage::get_session(&session_id)
+        .map_err(|error| agent_error(StatusCode::NOT_FOUND, error))?;
+
+    Ok(Json(AgentEventsResponse {
+        events: session.event_log,
+    }))
 }
 
 async fn workspace_status() -> Json<AgentWorkspaceStatus> {
@@ -68,7 +132,10 @@ async fn validate_workspace(
     let raw_path = request.path.trim();
 
     if raw_path.is_empty() {
-        return Err(agent_error(StatusCode::BAD_REQUEST, "Workspace path is required."));
+        return Err(agent_error(
+            StatusCode::BAD_REQUEST,
+            "Workspace path is required.",
+        ));
     }
 
     let path = PathBuf::from(raw_path);
@@ -89,7 +156,9 @@ async fn validate_workspace(
     let git_root = run_git(&canonical_path, &["rev-parse", "--show-toplevel"]);
     let is_git_repo = git_root
         .as_ref()
-        .map(|output| PathBuf::from(output.trim()).canonicalize().ok() == Some(canonical_path.clone()))
+        .map(|output| {
+            PathBuf::from(output.trim()).canonicalize().ok() == Some(canonical_path.clone())
+        })
         .unwrap_or(false);
 
     let git_branch = if is_git_repo {
@@ -140,6 +209,33 @@ fn run_git(workspace: &PathBuf, args: &[&str]) -> Result<String, String> {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn canonical_workspace_path(path: &str) -> Result<String, (StatusCode, Json<AgentApiError>)> {
+    let raw_path = path.trim();
+
+    if raw_path.is_empty() {
+        return Err(agent_error(
+            StatusCode::BAD_REQUEST,
+            "Workspace path is required.",
+        ));
+    }
+
+    let canonical_path = PathBuf::from(raw_path).canonicalize().map_err(|error| {
+        agent_error(
+            StatusCode::BAD_REQUEST,
+            format!("Unable to resolve workspace path: {error}"),
+        )
+    })?;
+
+    if !canonical_path.is_dir() {
+        return Err(agent_error(
+            StatusCode::BAD_REQUEST,
+            "Workspace path must be a directory.",
+        ));
+    }
+
+    Ok(canonical_path.to_string_lossy().to_string())
 }
 
 fn agent_error(

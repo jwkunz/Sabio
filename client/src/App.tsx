@@ -28,6 +28,8 @@ import {
 import { normalizeMathDelimiters } from "./lib/markdown";
 import type {
   AppMode,
+  AgentEvent,
+  AgentSessionSummary,
   DisplayFontSize,
   DisplayTheme,
   Message,
@@ -65,6 +67,12 @@ const formatElapsedSeconds = (seconds: number) => {
 
   return minutes > 0 ? `${minutes}m ${remainder}s` : `${remainder}s`;
 };
+
+const formatAgentEventType = (eventType: string) =>
+  eventType
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 
 const downloadMarkdown = (content: string, createdAt: number) => {
   const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
@@ -113,6 +121,10 @@ function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [activePanel, setActivePanel] = useState<"help" | "legal" | null>(null);
   const [promptHistoryCursor, setPromptHistoryCursor] = useState<number | null>(null);
+  const [agentSessions, setAgentSessions] = useState<AgentSessionSummary[]>([]);
+  const [selectedAgentSessionId, setSelectedAgentSessionId] = useState("");
+  const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
+  const [agentSessionStatus, setAgentSessionStatus] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ startX: number; widths: PaneWidths; handle: "left" | "right" } | null>(null);
@@ -131,6 +143,10 @@ function App() {
   const promptHistory = useMemo(
     () => messages.filter((message) => message.role === "user").map((message) => message.content),
     [messages]
+  );
+  const selectedAgentSession = useMemo(
+    () => agentSessions.find((agentSession) => agentSession.id === selectedAgentSessionId) ?? null,
+    [agentSessions, selectedAgentSessionId]
   );
 
   const loadModelOptions = async () => {
@@ -261,6 +277,23 @@ function App() {
 
     void loadModelOptions();
   }, [isHydrated]);
+
+  useEffect(() => {
+    if (!isHydrated || session.appMode !== "agent" || !session.agentWorkspace.canonicalPath) {
+      return;
+    }
+
+    void loadAgentSessions(session.agentWorkspace.canonicalPath);
+  }, [isHydrated, session.appMode, session.agentWorkspace.canonicalPath]);
+
+  useEffect(() => {
+    if (!selectedAgentSessionId) {
+      setAgentEvents([]);
+      return;
+    }
+
+    void loadAgentEvents(selectedAgentSessionId);
+  }, [selectedAgentSessionId]);
 
   useEffect(() => {
     chatScrollRef.current?.scrollTo({
@@ -715,6 +748,114 @@ function App() {
     }));
   };
 
+  const loadAgentSessions = async (workspacePath?: string) => {
+    const query = workspacePath ? `?workspacePath=${encodeURIComponent(workspacePath)}` : "";
+
+    try {
+      const response = await fetch(`/api/agent/sessions${query}`);
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Unable to load agent sessions.");
+      }
+
+      const sessions = (await response.json()) as AgentSessionSummary[];
+      setAgentSessions(sessions);
+
+      if (sessions.length > 0) {
+        setSelectedAgentSessionId((current) =>
+          current && sessions.some((agentSession) => agentSession.id === current)
+            ? current
+            : sessions[0].id
+        );
+      } else {
+        setSelectedAgentSessionId("");
+        setAgentEvents([]);
+      }
+    } catch (sessionError) {
+      setAgentSessionStatus((sessionError as Error).message || "Unable to load agent sessions.");
+    }
+  };
+
+  const loadAgentEvents = async (sessionId: string) => {
+    try {
+      const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/events`);
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Unable to load agent events.");
+      }
+
+      const payload = (await response.json()) as { events: AgentEvent[] };
+      setAgentEvents(payload.events);
+    } catch (eventError) {
+      setAgentSessionStatus((eventError as Error).message || "Unable to load agent events.");
+    }
+  };
+
+  const createAgentSession = async () => {
+    const workspace = session.agentWorkspace;
+
+    if (!workspace.canonicalPath) {
+      setAgentSessionStatus("Validate a workspace before creating an agent session.");
+      return null;
+    }
+
+    try {
+      const response = await fetch("/api/agent/sessions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          workspacePath: workspace.canonicalPath,
+          gitBranch: workspace.gitBranch || null
+        })
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Unable to create agent session.");
+      }
+
+      const created = (await response.json()) as AgentSessionSummary & { eventLog?: AgentEvent[] };
+      setAgentSessionStatus("Agent session ready.");
+      await loadAgentSessions(workspace.canonicalPath);
+      setSelectedAgentSessionId(created.id);
+      setAgentEvents(created.eventLog ?? []);
+      return created;
+    } catch (sessionError) {
+      setAgentSessionStatus((sessionError as Error).message || "Unable to create agent session.");
+      return null;
+    }
+  };
+
+  const renameAgentSession = async (title: string) => {
+    if (!selectedAgentSessionId) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/agent/sessions/${encodeURIComponent(selectedAgentSessionId)}/rename`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ title })
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Unable to rename agent session.");
+      }
+
+      await loadAgentSessions(session.agentWorkspace.canonicalPath);
+      setAgentSessionStatus("Session renamed.");
+    } catch (renameError) {
+      setAgentSessionStatus((renameError as Error).message || "Unable to rename agent session.");
+    }
+  };
+
   const updateWorkspaceInput = (inputPath: string) => {
     setSession((current) => ({
       ...current,
@@ -785,31 +926,32 @@ function App() {
     }
   };
 
-  const trustWorkspace = () => {
-    setSession((current) => {
-      const workspace = current.agentWorkspace;
-      const canTrust = Boolean(workspace.canonicalPath && workspace.isGitRepo && workspace.cleanWorktree);
+  const trustWorkspace = async () => {
+    const workspace = session.agentWorkspace;
+    const canTrust = Boolean(workspace.canonicalPath && workspace.isGitRepo && workspace.cleanWorktree);
 
-      if (!canTrust) {
-        return {
-          ...current,
-          agentWorkspace: {
-            ...workspace,
-            trusted: false,
-            message: "Workspace must be a clean git repository before trust."
-          }
-        };
-      }
-
-      return {
+    if (!canTrust) {
+      setSession((current) => ({
         ...current,
         agentWorkspace: {
-          ...workspace,
-          trusted: true,
-          message: "Workspace trusted."
+          ...current.agentWorkspace,
+          trusted: false,
+          message: "Workspace must be a clean git repository before trust."
         }
-      };
-    });
+      }));
+      return;
+    }
+
+    setSession((current) => ({
+      ...current,
+      agentWorkspace: {
+        ...current.agentWorkspace,
+        trusted: true,
+        message: "Workspace trusted."
+      }
+    }));
+
+    await createAgentSession();
   };
 
   const startResize = (handle: "left" | "right", clientX: number) => {
@@ -932,7 +1074,7 @@ function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={trustWorkspace}
+                  onClick={() => void trustWorkspace()}
                   disabled={
                     !session.agentWorkspace.canonicalPath ||
                     !session.agentWorkspace.isGitRepo ||
@@ -969,8 +1111,28 @@ function App() {
                 <strong>{session.agentWorkspace.message}</strong>
               </section>
               <section className="agent-file-tree">
-                <h3>Files</h3>
-                <p className="empty-state">No workspace tree loaded.</p>
+                <h3>Sessions</h3>
+                {agentSessions.length === 0 ? (
+                  <p className="empty-state">No backend sessions yet.</p>
+                ) : (
+                  <div className="agent-session-list">
+                    {agentSessions.map((agentSession) => (
+                      <button
+                        type="button"
+                        className={
+                          agentSession.id === selectedAgentSessionId
+                            ? "agent-session-button is-active"
+                            : "agent-session-button"
+                        }
+                        key={agentSession.id}
+                        onClick={() => setSelectedAgentSessionId(agentSession.id)}
+                      >
+                        <strong>{agentSession.title}</strong>
+                        <span>{new Date(agentSession.updatedAt).toLocaleString()}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </section>
             </div>
           </>
@@ -1176,18 +1338,40 @@ function App() {
                 <span>{session.agentWorkspace.trusted ? "Trusted" : "Blocked"}</span>
               </div>
               <p>
-                {session.agentWorkspace.trusted
-                  ? "No agent run is active."
-                  : "Trust a clean git workspace before starting an agent run."}
+                {selectedAgentSession
+                  ? `${selectedAgentSession.title} on ${selectedAgentSession.gitBranch || "current branch"}`
+                  : session.agentWorkspace.trusted
+                    ? "No agent session selected."
+                    : "Trust a clean git workspace before starting an agent run."}
               </p>
             </article>
-            <article className="agent-event">
-              <div className="message-meta">
-                <span>Plan</span>
-                <span>Pending</span>
-              </div>
-              <p>Plan events will appear here after workspace trust and the agent loop are enabled.</p>
-            </article>
+            {agentSessionStatus ? (
+              <article className="agent-event">
+                <div className="message-meta">
+                  <span>Status</span>
+                </div>
+                <p>{agentSessionStatus}</p>
+              </article>
+            ) : null}
+            {agentEvents.length === 0 ? (
+              <article className="agent-event">
+                <div className="message-meta">
+                  <span>Plan</span>
+                  <span>Pending</span>
+                </div>
+                <p>Plan events will appear here after workspace trust and the agent loop are enabled.</p>
+              </article>
+            ) : (
+              agentEvents.map((event) => (
+                <article className="agent-event" key={event.id}>
+                  <div className="message-meta">
+                    <span>{formatAgentEventType(event.type)}</span>
+                    <span>{new Date(event.timestamp).toLocaleString()}</span>
+                  </div>
+                  <pre className="agent-event-payload">{JSON.stringify(event.payload, null, 2)}</pre>
+                </article>
+              ))
+            )}
           </div>
         )}
 
@@ -1384,6 +1568,37 @@ function App() {
           </div>
         ) : (
           <div className="pane-content scrollable settings-stack">
+            <section className="settings-card">
+              <h3>Session</h3>
+              {selectedAgentSession ? (
+                <>
+                  <label className="field compact-field">
+                    <span>Name</span>
+                    <input
+                      value={selectedAgentSession.title}
+                      onChange={(event) => {
+                        const title = event.target.value;
+                        setAgentSessions((current) =>
+                          current.map((agentSession) =>
+                            agentSession.id === selectedAgentSession.id
+                              ? { ...agentSession, title }
+                              : agentSession
+                          )
+                        );
+                      }}
+                      onBlur={(event) => void renameAgentSession(event.target.value)}
+                    />
+                  </label>
+                  <p className="session-meta">
+                    {selectedAgentSession.workspacePath}
+                    <br />
+                    Updated {new Date(selectedAgentSession.updatedAt).toLocaleString()}
+                  </p>
+                </>
+              ) : (
+                <p className="empty-state">Trust a workspace to create a session.</p>
+              )}
+            </section>
             <section className="settings-card">
               <h3>Approvals</h3>
               <p className="empty-state">No approvals pending.</p>

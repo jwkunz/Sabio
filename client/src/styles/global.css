@@ -729,6 +729,49 @@ button:disabled {
   width: min(92%, 860px);
 }
 
+.agent-event-payload {
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--text);
+  padding: 0.8rem;
+  white-space: pre-wrap;
+}
+
+.agent-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.agent-session-button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  width: 100%;
+  border-color: var(--border);
+  background: var(--control-bg);
+  color: var(--text);
+  padding: 0.75rem;
+  text-align: left;
+}
+
+.agent-session-button.is-active {
+  border-color: rgba(123, 223, 246, 0.42);
+  background: rgba(123, 223, 246, 0.12);
+}
+
+.agent-session-button span,
+.session-meta {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .agent-composer textarea {
   min-height: 96px;
 }

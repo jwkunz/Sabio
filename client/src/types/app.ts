@@ -73,3 +73,36 @@ export interface ChatRequestBody {
   prompt: string;
   requestId: string;
 }
+
+export interface AgentSessionSummary {
+  id: string;
+  title: string;
+  workspacePath: string;
+  gitBranch?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type AgentEventType =
+  | "session_started"
+  | "assistant_message_delta"
+  | "plan_created"
+  | "approval_requested"
+  | "approval_resolved"
+  | "tool_started"
+  | "tool_output"
+  | "tool_finished"
+  | "patch_created"
+  | "git_commit_created"
+  | "error"
+  | "cancelled"
+  | "session_finished";
+
+export interface AgentEvent {
+  id: string;
+  sessionId: string;
+  timestamp: number;
+  type: AgentEventType;
+  payload: Record<string, unknown>;
+  parentEventId?: string | null;
+}
