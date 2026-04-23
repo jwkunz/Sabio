@@ -579,7 +579,7 @@ fn execute_read_file(workspace_root: &Path, args: &Value) -> Result<Value, Strin
 
 fn execute_write_file(workspace_root: &Path, args: &Value) -> Result<Value, String> {
     let path = require_arg(args, "path")?;
-    let content = require_arg(args, "content")?;
+    let content = require_raw_arg(args, "content")?;
 
     if content.len() > MAX_WRITE_BYTES {
         return Err(format!(
@@ -614,7 +614,7 @@ fn execute_write_file(workspace_root: &Path, args: &Value) -> Result<Value, Stri
 }
 
 fn execute_apply_patch(workspace_root: &Path, args: &Value) -> Result<Value, String> {
-    let patch = require_arg(args, "patch")?;
+    let patch = require_raw_arg(args, "patch")?;
 
     if patch.len() > MAX_PATCH_BYTES {
         return Err(format!(
@@ -890,6 +890,13 @@ fn require_arg<'a>(args: &'a Value, name: &str) -> Result<&'a str, String> {
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(str::trim)
+        .ok_or_else(|| format!("{name} is required."))
+}
+
+fn require_raw_arg<'a>(args: &'a Value, name: &str) -> Result<&'a str, String> {
+    args.get(name)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| format!("{name} is required."))
 }
 
