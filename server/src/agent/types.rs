@@ -251,6 +251,13 @@ pub struct CreatePlanStepRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GeneratePlanRequest {
+    pub model: String,
+    pub task: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExecuteWriteToolRequest {
     pub tool: String,
     pub args: Value,

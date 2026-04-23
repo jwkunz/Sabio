@@ -49,6 +49,7 @@ export interface SessionState {
   systemPrompt: string;
   selectedSystemPromptProfileId: string;
   draftInput: string;
+  agentTaskDraft: string;
   paneWidths: PaneWidths;
   displayPreferences: DisplayPreferences;
   agentWorkspace: AgentWorkspaceState;

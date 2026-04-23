@@ -34,9 +34,9 @@ const APP_URL: &str = "http://127.0.0.1:3000";
 const LARGE_FILE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone)]
-struct AppState {
-    client: Client,
-    ollama_base_url: String,
+pub(crate) struct AppState {
+    pub(crate) client: Client,
+    pub(crate) ollama_base_url: String,
 }
 
 #[derive(Debug, Serialize)]

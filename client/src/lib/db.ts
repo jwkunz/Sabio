@@ -12,6 +12,7 @@ const defaultSession: SessionState = {
   systemPrompt: "",
   selectedSystemPromptProfileId: "generic",
   draftInput: "",
+  agentTaskDraft: "",
   paneWidths: {
     left: 22,
     center: 52,
@@ -66,6 +67,7 @@ export const loadSession = async () => {
       ...stored?.agentWorkspace
     },
     appMode: stored?.appMode ?? "chat",
+    agentTaskDraft: stored?.agentTaskDraft ?? "",
     selectedSystemPromptProfileId: stored?.selectedSystemPromptProfileId ?? "generic"
   };
 };

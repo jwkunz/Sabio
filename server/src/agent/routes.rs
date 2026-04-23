@@ -6,14 +6,17 @@ use std::{
 
 use async_stream::stream;
 use axum::{
-    extract::{Path as AxumPath, Query},
+    extract::{Path as AxumPath, Query, State},
     http::StatusCode,
     response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
     Json, Router,
 };
 use futures_util::Stream;
+use serde::Deserialize;
 use serde_json::json;
+
+use crate::AppState;
 
 use super::storage;
 use super::tools::{
@@ -25,14 +28,11 @@ use super::types::{
     AgentApiError, AgentApprovalKind, AgentApprovalsResponse, AgentCapability, AgentEventsResponse,
     AgentHealthResponse, AgentPlansResponse, AgentRouteStatus, AgentSessionRecord,
     AgentSessionSummary, AgentWorkspaceStatus, CreatePlanRequest, CreateSessionRequest,
-    ExecuteWriteToolRequest, ListSessionsQuery, RenameSessionRequest, ResolveApprovalRequest,
-    ValidateWorkspaceRequest, ValidateWorkspaceResponse,
+    ExecuteWriteToolRequest, GeneratePlanRequest, ListSessionsQuery, RenameSessionRequest,
+    ResolveApprovalRequest, ValidateWorkspaceRequest, ValidateWorkspaceResponse,
 };
 
-pub fn router<S>() -> Router<S>
-where
-    S: Clone + Send + Sync + 'static,
-{
+pub fn router() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
         .route("/capabilities", get(capabilities))
@@ -56,6 +56,7 @@ where
             "/sessions/:session_id/plans",
             get(session_plans).post(create_plan),
         )
+        .route("/sessions/:session_id/plans/generate", post(generate_plan))
         .route(
             "/sessions/:session_id/tools/execute-write",
             post(execute_write_tool_route),
@@ -258,6 +259,95 @@ async fn create_plan(
         .collect();
 
     storage::create_plan(&session_id, request.title, request.summary, steps)
+        .map(Json)
+        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))
+}
+
+async fn generate_plan(
+    State(state): State<AppState>,
+    AxumPath(session_id): AxumPath<String>,
+    Json(request): Json<GeneratePlanRequest>,
+) -> Result<Json<super::types::AgentPlan>, (StatusCode, Json<AgentApiError>)> {
+    let model = request.model.trim();
+    let task = request.task.trim();
+
+    if model.is_empty() {
+        return Err(agent_error(StatusCode::BAD_REQUEST, "Model is required."));
+    }
+
+    if task.is_empty() {
+        return Err(agent_error(StatusCode::BAD_REQUEST, "Task is required."));
+    }
+
+    let session = storage::get_session(&session_id)
+        .map_err(|error| agent_error(StatusCode::NOT_FOUND, error))?;
+    let prompt = plan_prompt(&session, task);
+    let response = state
+        .client
+        .post(format!("{}/api/generate", state.ollama_base_url))
+        .json(&json!({
+            "model": model,
+            "prompt": prompt,
+            "stream": false,
+        }))
+        .send()
+        .await
+        .map_err(|error| agent_error(StatusCode::BAD_GATEWAY, error.to_string()))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(agent_error(
+            StatusCode::BAD_GATEWAY,
+            format!("Ollama plan generation failed with {status}: {body}"),
+        ));
+    }
+
+    let body = response
+        .json::<OllamaGenerateResponse>()
+        .await
+        .map_err(|error| agent_error(StatusCode::BAD_GATEWAY, error.to_string()))?;
+
+    if let Some(error) = body.error.filter(|value| !value.trim().is_empty()) {
+        return Err(agent_error(StatusCode::BAD_GATEWAY, error));
+    }
+
+    let response_text = body.response.unwrap_or_default();
+    let plan_json = extract_json_object(&response_text).ok_or_else(|| {
+        agent_error(
+            StatusCode::BAD_GATEWAY,
+            "Model did not return a JSON plan object.",
+        )
+    })?;
+    let draft = serde_json::from_str::<ModelPlanDraft>(&plan_json)
+        .map_err(|error| agent_error(StatusCode::BAD_GATEWAY, error.to_string()))?;
+    let title = fallback_trim(draft.title, "Generated agent plan", 120);
+    let summary = fallback_trim(draft.summary, "Model-generated implementation plan.", 600);
+    let steps: Vec<(String, String)> = draft
+        .steps
+        .into_iter()
+        .take(8)
+        .filter_map(|step| {
+            let title = step.title.trim();
+            if title.is_empty() {
+                return None;
+            }
+
+            Some((
+                truncate(title, 160),
+                truncate(step.detail.unwrap_or_default().trim(), 800),
+            ))
+        })
+        .collect();
+
+    if steps.is_empty() {
+        return Err(agent_error(
+            StatusCode::BAD_GATEWAY,
+            "Model plan did not include any usable steps.",
+        ));
+    }
+
+    storage::create_plan(&session_id, title, summary, steps)
         .map(Json)
         .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))
 }
@@ -469,6 +559,81 @@ fn canonical_workspace_path(path: &str) -> Result<String, (StatusCode, Json<Agen
     }
 
     Ok(canonical_path.to_string_lossy().to_string())
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaGenerateResponse {
+    response: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelPlanDraft {
+    title: String,
+    summary: String,
+    #[serde(default)]
+    steps: Vec<ModelPlanStepDraft>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelPlanStepDraft {
+    title: String,
+    detail: Option<String>,
+}
+
+fn plan_prompt(session: &AgentSessionRecord, task: &str) -> String {
+    format!(
+        r#"You are Sabio Agent Mode, a local coding agent planning work before execution.
+Return ONLY valid JSON with this shape:
+{{"title":"short plan title","summary":"one or two sentence summary","steps":[{{"title":"concrete step","detail":"what to inspect or change and how to verify"}}]}}
+
+Planning rules:
+- Make 3 to 7 concrete implementation steps.
+- Prefer small, reviewable changes.
+- Include verification in the final step.
+- Do not include Markdown fences, prose before JSON, comments, or trailing commas.
+- Commands with network access, destructive file operations, or risky git operations require approval.
+
+Workspace: {}
+Git branch: {}
+User task: {}
+"#,
+        session.workspace_path,
+        session.git_branch.as_deref().unwrap_or("unknown"),
+        task
+    )
+}
+
+fn extract_json_object(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let without_fence = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .and_then(|value| value.strip_suffix("```"))
+        .map(str::trim)
+        .unwrap_or(trimmed);
+    let start = without_fence.find('{')?;
+    let end = without_fence.rfind('}')?;
+
+    if start > end {
+        return None;
+    }
+
+    Some(without_fence[start..=end].to_string())
+}
+
+fn fallback_trim(value: String, fallback: &str, max_chars: usize) -> String {
+    let trimmed = value.trim();
+
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        truncate(trimmed, max_chars)
+    }
+}
+
+fn truncate(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
 }
 
 fn agent_error(

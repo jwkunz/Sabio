@@ -97,6 +97,7 @@ function App() {
     systemPrompt: DEFAULT_SYSTEM_PROMPT,
     selectedSystemPromptProfileId: "generic",
     draftInput: "",
+    agentTaskDraft: "",
     paneWidths: defaultPaneWidths,
     displayPreferences: defaultDisplayPreferences,
     agentWorkspace: {
@@ -382,6 +383,13 @@ function App() {
     setSession((current) => ({
       ...current,
       draftInput: value
+    }));
+  };
+
+  const updateAgentTaskDraft = (value: string) => {
+    setSession((current) => ({
+      ...current,
+      agentTaskDraft: value
     }));
   };
 
@@ -903,6 +911,58 @@ function App() {
       setAgentSessionStatus("Plan created and queued for approval.");
     } catch (planError) {
       setAgentSessionStatus((planError as Error).message || "Unable to create plan.");
+    }
+  };
+
+  const generateAgentPlan = async () => {
+    const task = session.agentTaskDraft.trim();
+
+    if (!selectedAgentSessionId) {
+      setAgentSessionStatus("Select or trust a session before generating a plan.");
+      return;
+    }
+
+    if (!session.selectedModel) {
+      setAgentSessionStatus("Select an Ollama model before generating a plan.");
+      return;
+    }
+
+    if (!task) {
+      setAgentSessionStatus("Describe an agent task before generating a plan.");
+      return;
+    }
+
+    setAgentSessionStatus("Generating an agent plan...");
+
+    try {
+      const response = await fetch(
+        `/api/agent/sessions/${encodeURIComponent(selectedAgentSessionId)}/plans/generate`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: session.selectedModel,
+            task
+          })
+        }
+      );
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Unable to generate plan.");
+      }
+
+      updateAgentTaskDraft("");
+      await Promise.all([
+        loadAgentPlans(selectedAgentSessionId),
+        loadAgentApprovals(selectedAgentSessionId),
+        loadAgentEvents(selectedAgentSessionId)
+      ]);
+      setAgentSessionStatus("Model-generated plan created and queued for approval.");
+    } catch (planError) {
+      setAgentSessionStatus((planError as Error).message || "Unable to generate plan.");
     }
   };
 
@@ -1605,7 +1665,17 @@ function App() {
           </div>
         ) : (
           <div className="composer agent-composer">
-            <textarea placeholder="Describe an agent task." disabled />
+            <textarea
+              placeholder="Describe an agent task. Sabio will ask the selected model for a reviewed plan first."
+              value={session.agentTaskDraft}
+              onChange={(event) => updateAgentTaskDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && event.ctrlKey && event.shiftKey) {
+                  event.preventDefault();
+                  void generateAgentPlan();
+                }
+              }}
+            />
             <div className="composer-actions">
               <div className="selection-summary">
                 <span>{session.selectedModel || "No model selected"}</span>
@@ -1619,6 +1689,13 @@ function App() {
                   disabled={!selectedAgentSessionId}
                 >
                   Create starter plan
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void generateAgentPlan()}
+                  disabled={!selectedAgentSessionId || !session.selectedModel || !session.agentTaskDraft.trim()}
+                >
+                  Generate plan
                 </button>
                 <button type="button" disabled>
                   Run agent
