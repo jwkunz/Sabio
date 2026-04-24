@@ -77,6 +77,105 @@ const formatAgentEventType = (eventType: string) =>
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
 
+const readAgentString = (value: unknown) => (typeof value === "string" && value.trim() ? value : "");
+const readAgentBoolean = (value: unknown) => (typeof value === "boolean" ? value : null);
+const readAgentNumber = (value: unknown) => (typeof value === "number" ? value : null);
+
+const summarizeAgentEvent = (event: AgentEvent) => {
+  const payload = event.payload ?? {};
+  const tool = readAgentString(payload.tool);
+  const message = readAgentString(payload.message);
+  const stepId = readAgentString(payload.stepId);
+  const commitHash = readAgentString(payload.commitHash);
+  const diagnostic = readAgentString(payload.diagnostic);
+  const note = readAgentString(payload.note);
+  const title = readAgentString(payload.title);
+  const detail = readAgentString(payload.detail);
+  const status = readAgentString(payload.status);
+  const ok = readAgentBoolean(payload.ok);
+  const exitCode = readAgentNumber(payload.exitCode);
+  const stdout = readAgentString(payload.stdout);
+  const stderr = readAgentString(payload.stderr);
+  const errors = Array.isArray(payload.errors) ? payload.errors.filter((value): value is string => typeof value === "string") : [];
+
+  switch (event.type) {
+    case "session_started":
+      return {
+        summary: message || "Agent session created.",
+        detail: readAgentString(payload.workspacePath)
+      };
+    case "assistant_message_delta":
+      return {
+        summary: message || "Assistant update.",
+        detail: stepId ? `Step ${stepId}` : ""
+      };
+    case "plan_created":
+      return {
+        summary: title || readAgentString(payload.title) || "Plan created.",
+        detail: detail || readAgentString(payload.summary)
+      };
+    case "plan_updated":
+      return {
+        summary: message || "Plan updated.",
+        detail: status ? `Step status: ${formatAgentEventType(status)}` : ""
+      };
+    case "approval_requested":
+      return {
+        summary: title || "Approval requested.",
+        detail: detail || message
+      };
+    case "approval_resolved":
+      return {
+        summary: title || "Approval resolved.",
+        detail: readAgentString(payload.status)
+      };
+    case "tool_started":
+      return {
+        summary: tool ? `Starting ${tool}` : "Tool started.",
+        detail: note || message
+      };
+    case "tool_finished":
+      return {
+        summary: tool ? `${tool} ${ok ? "completed" : "failed"}` : "Tool finished.",
+        detail:
+          errors[0] ||
+          (exitCode !== null ? `Exit code ${exitCode}` : "") ||
+          stdout.slice(0, 140) ||
+          stderr.slice(0, 140)
+      };
+    case "patch_created":
+      return {
+        summary: tool ? `${tool} changed the workspace.` : "Workspace change created.",
+        detail: readAgentString((payload.payload as Record<string, unknown> | undefined)?.path)
+      };
+    case "git_commit_created":
+      return {
+        summary: commitHash ? `Created commit ${commitHash.slice(0, 7)}` : "Git commit created.",
+        detail: stdout.split("\n")[0] || stderr.split("\n")[0]
+      };
+    case "error":
+      return {
+        summary: message || "Agent error.",
+        detail: diagnostic || errors[0] || detail
+      };
+    case "cancelled":
+      return {
+        summary: message || "Run cancelled.",
+        detail: ""
+      };
+    case "session_finished":
+      return {
+        summary: message || "Run finished.",
+        detail: readAgentString(payload.summary)
+      };
+    default:
+      return {
+        summary: formatAgentEventType(event.type),
+        detail: ""
+      };
+  }
+};
+
 const downloadMarkdown = (content: string, createdAt: number) => {
   const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -164,6 +263,15 @@ function App() {
         return approval?.status === "approved" && hasRemainingSteps;
       }) ?? null,
     [agentApprovals, agentPlans]
+  );
+  const recentAgentCommits = useMemo(
+    () =>
+      agentEvents
+        .filter((event) => event.type === "git_commit_created")
+        .slice()
+        .reverse()
+        .slice(0, 5),
+    [agentEvents]
   );
 
   const loadModelOptions = async () => {
@@ -1754,6 +1862,20 @@ function App() {
                 <p>{agentSessionStatus}</p>
               </article>
             ) : null}
+            <section className="agent-run-strip">
+              <article className="agent-status-card">
+                <span>Run</span>
+                <strong>{isAgentRunning ? "Running" : "Idle"}</strong>
+              </article>
+              <article className="agent-status-card">
+                <span>Ready plan</span>
+                <strong>{runnableAgentPlan?.title || "No approved plan"}</strong>
+              </article>
+              <article className="agent-status-card">
+                <span>Recent commits</span>
+                <strong>{recentAgentCommits.length}</strong>
+              </article>
+            </section>
             {agentPlans.length > 0 ? (
               <section className="agent-plan-stack">
                 {agentPlans.map((plan) => {
@@ -1781,6 +1903,25 @@ function App() {
                 })}
               </section>
             ) : null}
+            {recentAgentCommits.length > 0 ? (
+              <section className="agent-commit-list">
+                {recentAgentCommits.map((event) => {
+                  const commitHash = readAgentString(event.payload.commitHash);
+                  const stdout = readAgentString(event.payload.stdout);
+
+                  return (
+                    <article className="agent-event" key={event.id}>
+                      <div className="message-meta">
+                        <span>Commit</span>
+                        <span>{new Date(event.timestamp).toLocaleString()}</span>
+                      </div>
+                      <p>{commitHash ? commitHash.slice(0, 7) : "Unknown commit"}</p>
+                      {stdout ? <span className="agent-event-detail">{stdout.split("\n")[0]}</span> : null}
+                    </article>
+                  );
+                })}
+              </section>
+            ) : null}
             {agentEvents.length === 0 ? (
               <article className="agent-event">
                 <div className="message-meta">
@@ -1790,15 +1931,24 @@ function App() {
                 <p>Plan events will appear here after workspace trust and the agent loop are enabled.</p>
               </article>
             ) : (
-              agentEvents.map((event) => (
-                <article className="agent-event" key={event.id}>
-                  <div className="message-meta">
-                    <span>{formatAgentEventType(event.type)}</span>
-                    <span>{new Date(event.timestamp).toLocaleString()}</span>
-                  </div>
-                  <pre className="agent-event-payload">{JSON.stringify(event.payload, null, 2)}</pre>
-                </article>
-              ))
+              agentEvents.map((event) => {
+                const summary = summarizeAgentEvent(event);
+
+                return (
+                  <article className="agent-event" key={event.id}>
+                    <div className="message-meta">
+                      <span>{formatAgentEventType(event.type)}</span>
+                      <span>{new Date(event.timestamp).toLocaleString()}</span>
+                    </div>
+                    <p>{summary.summary}</p>
+                    {summary.detail ? <span className="agent-event-detail">{summary.detail}</span> : null}
+                    <details className="agent-event-raw">
+                      <summary>Payload</summary>
+                      <pre className="agent-event-payload">{JSON.stringify(event.payload, null, 2)}</pre>
+                    </details>
+                  </article>
+                );
+              })
             )}
           </div>
         )}

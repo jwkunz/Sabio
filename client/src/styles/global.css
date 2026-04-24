@@ -729,6 +729,33 @@ button:disabled {
   width: min(92%, 860px);
 }
 
+.agent-event p {
+  margin: 0;
+}
+
+.agent-event-detail {
+  display: block;
+  margin-top: 0.45rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.agent-event-raw {
+  margin-top: 0.75rem;
+}
+
+.agent-event-raw summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.agent-run-strip,
+.agent-commit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
 .agent-plan-stack {
   display: flex;
   flex-direction: column;
