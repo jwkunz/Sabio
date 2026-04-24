@@ -80,6 +80,21 @@ const formatAgentEventType = (eventType: string) =>
 const readAgentString = (value: unknown) => (typeof value === "string" && value.trim() ? value : "");
 const readAgentBoolean = (value: unknown) => (typeof value === "boolean" ? value : null);
 const readAgentNumber = (value: unknown) => (typeof value === "number" ? value : null);
+const readAgentStringArray = (value: unknown) =>
+  Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+
+const formatApprovalCommand = (approval: AgentApproval) => {
+  const payload = approval.payload ?? {};
+  const command = readAgentString(payload.command);
+  const args = readAgentStringArray(payload.args);
+  const cwd = readAgentString(payload.cwd);
+
+  if (!command) {
+    return "";
+  }
+
+  return [command, ...args].join(" ") + (cwd ? ` @ ${cwd}` : "");
+};
 
 const summarizeAgentEvent = (event: AgentEvent) => {
   const payload = event.payload ?? {};
@@ -255,6 +270,15 @@ function App() {
     () => agentSessions.find((agentSession) => agentSession.id === selectedAgentSessionId) ?? null,
     [agentSessions, selectedAgentSessionId]
   );
+  const pendingCommandApprovals = useMemo(
+    () =>
+      agentApprovals.filter(
+        (approval) =>
+          approval.status === "pending" &&
+          (approval.kind === "network_command" || approval.kind === "destructive_command")
+      ),
+    [agentApprovals]
+  );
   const runnableAgentPlan = useMemo(
     () =>
       agentPlans.find((plan) => {
@@ -263,6 +287,19 @@ function App() {
         return approval?.status === "approved" && hasRemainingSteps;
       }) ?? null,
     [agentApprovals, agentPlans]
+  );
+  const commandLogEntries = useMemo(
+    () =>
+      agentEvents
+        .filter(
+          (event) =>
+            event.type === "tool_finished" &&
+            readAgentString(event.payload.tool) === "run_command"
+        )
+        .slice()
+        .reverse()
+        .slice(0, 8),
+    [agentEvents]
   );
   const recentAgentCommits = useMemo(
     () =>
@@ -1239,7 +1276,16 @@ function App() {
         loadAgentPlans(selectedAgentSessionId),
         loadAgentEvents(selectedAgentSessionId)
       ]);
-      setAgentSessionStatus(approved ? "Approval accepted." : "Approval rejected.");
+      const approval = agentApprovals.find((entry) => entry.id === approvalId);
+      const isCommandApproval =
+        approval?.kind === "network_command" || approval?.kind === "destructive_command";
+      setAgentSessionStatus(
+        approved
+          ? isCommandApproval
+            ? "Approval accepted. Rerun the agent to continue the paused step."
+            : "Approval accepted."
+          : "Approval rejected."
+      );
     } catch (approvalError) {
       setAgentSessionStatus((approvalError as Error).message || "Unable to resolve approval.");
     }
@@ -1870,11 +1916,17 @@ function App() {
             <section className="agent-run-strip">
               <article className="agent-status-card">
                 <span>Run</span>
-                <strong>{isAgentRunning ? "Running" : "Idle"}</strong>
+                <strong>
+                  {isAgentRunning ? "Running" : pendingCommandApprovals.length > 0 ? "Paused" : "Idle"}
+                </strong>
               </article>
               <article className="agent-status-card">
                 <span>Ready plan</span>
                 <strong>{runnableAgentPlan?.title || "No approved plan"}</strong>
+              </article>
+              <article className="agent-status-card">
+                <span>Pending approvals</span>
+                <strong>{pendingCommandApprovals.length}</strong>
               </article>
               <article className="agent-status-card">
                 <span>Recent commits</span>
@@ -2069,7 +2121,7 @@ function App() {
                   onClick={() => void runAgentPlan()}
                   disabled={!selectedAgentSessionId || !session.selectedModel || !runnableAgentPlan || isAgentRunning}
                 >
-                  Run agent
+                  {pendingCommandApprovals.length > 0 ? "Resume agent" : "Run agent"}
                 </button>
                 {isAgentRunning ? (
                   <button type="button" className="secondary-button" onClick={() => void cancelAgentRun()}>
@@ -2250,6 +2302,9 @@ function App() {
                       </div>
                       <p>{approval.detail}</p>
                       <small>{formatAgentEventType(approval.kind)}</small>
+                      {formatApprovalCommand(approval) ? (
+                        <pre className="agent-event-payload">{formatApprovalCommand(approval)}</pre>
+                      ) : null}
                       {approval.status === "pending" ? (
                         <div className="approval-actions">
                           <button type="button" onClick={() => void resolveAgentApproval(approval.id, true)}>
@@ -2271,7 +2326,45 @@ function App() {
             </section>
             <section className="settings-card">
               <h3>Command Log</h3>
-              <p className="empty-state">No command output yet.</p>
+              {commandLogEntries.length === 0 ? (
+                <p className="empty-state">No command output yet.</p>
+              ) : (
+                <div className="approval-list">
+                  {commandLogEntries.map((event) => {
+                    const payload = event.payload ?? {};
+                    const commandArgs =
+                      (payload.args as Record<string, unknown> | undefined) ?? {};
+                    const command = [readAgentString(commandArgs.command), ...readAgentStringArray(commandArgs.args)]
+                      .filter(Boolean)
+                      .join(" ");
+                    const resultPayload =
+                      (payload.payload as Record<string, unknown> | undefined) ?? {};
+                    const stdout = readAgentString(resultPayload.stdout);
+                    const stderr = readAgentString(resultPayload.stderr);
+                    const approvalStatus = readAgentString(resultPayload.approvalStatus);
+                    const errors = Array.isArray(payload.errors)
+                      ? payload.errors.filter((value): value is string => typeof value === "string")
+                      : [];
+
+                    return (
+                      <article className="approval-card" key={event.id}>
+                        <div className="approval-card-header">
+                          <strong>{command || "run_command"}</strong>
+                          <span>{new Date(event.timestamp).toLocaleString()}</span>
+                        </div>
+                        <p>
+                          {errors[0] ||
+                            stdout.split("\n")[0] ||
+                            stderr.split("\n")[0] ||
+                            (approvalStatus ? `Approval ${approvalStatus}.` : "Command finished.")}
+                        </p>
+                        {stdout ? <pre className="agent-event-payload">{stdout}</pre> : null}
+                        {!stdout && stderr ? <pre className="agent-event-payload">{stderr}</pre> : null}
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
             </section>
             <section className="settings-card">
               <h3>Command Policy</h3>
