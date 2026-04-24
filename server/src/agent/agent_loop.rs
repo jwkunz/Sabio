@@ -21,8 +21,8 @@ use super::{
     },
     types::{
         AgentApiError, AgentApproval, AgentApprovalKind, AgentApprovalStatus, AgentEventType,
-        AgentPlan, AgentPlanStepStatus, AgentRunStatusResponse, AgentSessionRecord,
-        CancelRunResponse, RunPlanResponse,
+        AgentPlan, AgentPlanStepStatus, AgentRunOutcome, AgentRunStatusResponse,
+        AgentSessionRecord, CancelRunResponse, RunPlanResponse,
     },
 };
 
@@ -253,7 +253,26 @@ pub async fn run_approved_plan(
                         &step.id,
                         AgentPlanStepStatus::Pending,
                     );
-                    return Err(error);
+                    return Ok(RunPlanResponse {
+                        plan: storage::list_plans(session_id)
+                            .map_err(|storage_error| agent_error(StatusCode::BAD_REQUEST, storage_error))?
+                            .into_iter()
+                            .find(|candidate| candidate.id == plan_id)
+                            .ok_or_else(|| agent_error(StatusCode::NOT_FOUND, "Plan not found."))?,
+                        summary: error.1.detail.clone(),
+                        outcome: AgentRunOutcome::Paused,
+                    });
+                }
+                if is_cancelled_error(&error.1.detail) {
+                    return Ok(RunPlanResponse {
+                        plan: storage::list_plans(session_id)
+                            .map_err(|storage_error| agent_error(StatusCode::BAD_REQUEST, storage_error))?
+                            .into_iter()
+                            .find(|candidate| candidate.id == plan_id)
+                            .ok_or_else(|| agent_error(StatusCode::NOT_FOUND, "Plan not found."))?,
+                        summary: error.1.detail.clone(),
+                        outcome: AgentRunOutcome::Cancelled,
+                    });
                 }
                 let _ = append_run_memory(
                     session_id,
@@ -393,7 +412,11 @@ pub async fn run_approved_plan(
         .find(|candidate| candidate.id == plan_id)
         .ok_or_else(|| agent_error(StatusCode::NOT_FOUND, "Plan not found."))?;
 
-    Ok(RunPlanResponse { plan, summary })
+    Ok(RunPlanResponse {
+        plan,
+        summary,
+        outcome: AgentRunOutcome::Completed,
+    })
 }
 
 async fn request_step_action(

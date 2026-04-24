@@ -31,6 +31,7 @@ import type {
   AgentApproval,
   AgentEvent,
   AgentPlan,
+  AgentRunOutcome,
   AgentSessionSummary,
   AgentToolSpec,
   DisplayFontSize,
@@ -76,6 +77,9 @@ const formatAgentEventType = (eventType: string) =>
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+
+const formatRunOutcome = (outcome: AgentRunOutcome | null) =>
+  outcome ? formatAgentEventType(outcome) : "Idle";
 
 const readAgentString = (value: unknown) => (typeof value === "string" && value.trim() ? value : "");
 const readAgentBoolean = (value: unknown) => (typeof value === "boolean" ? value : null);
@@ -247,6 +251,7 @@ function App() {
   const [agentApprovals, setAgentApprovals] = useState<AgentApproval[]>([]);
   const [agentPlans, setAgentPlans] = useState<AgentPlan[]>([]);
   const [isAgentRunning, setIsAgentRunning] = useState(false);
+  const [lastAgentRunOutcome, setLastAgentRunOutcome] = useState<AgentRunOutcome | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ startX: number; widths: PaneWidths; handle: "left" | "right" } | null>(null);
@@ -1196,15 +1201,17 @@ function App() {
         throw new Error(payload?.error || "Unable to run agent plan.");
       }
 
-      const payload = (await response.json()) as { summary: string };
+      const payload = (await response.json()) as { summary: string; outcome?: AgentRunOutcome };
       await Promise.all([
         loadAgentSessions(session.agentWorkspace.canonicalPath),
         loadAgentPlans(selectedAgentSessionId),
         loadAgentApprovals(selectedAgentSessionId),
         loadAgentEvents(selectedAgentSessionId)
       ]);
+      setLastAgentRunOutcome(payload.outcome ?? null);
       setAgentSessionStatus(payload.summary || "Approved plan run completed.");
     } catch (runError) {
+      setLastAgentRunOutcome(null);
       setAgentSessionStatus((runError as Error).message || "Unable to run agent plan.");
       await Promise.all([
         loadAgentSessions(session.agentWorkspace.canonicalPath),
@@ -1237,6 +1244,7 @@ function App() {
         throw new Error(payload?.error || "Unable to cancel agent run.");
       }
 
+      setLastAgentRunOutcome(payload?.cancelled ? "cancelled" : null);
       setAgentSessionStatus(payload?.message || "Cancellation requested.");
       await Promise.all([
         loadAgentSessions(session.agentWorkspace.canonicalPath),
@@ -1915,9 +1923,13 @@ function App() {
             ) : null}
             <section className="agent-run-strip">
               <article className="agent-status-card">
-                <span>Run</span>
+                <span>Outcome</span>
                 <strong>
-                  {isAgentRunning ? "Running" : pendingCommandApprovals.length > 0 ? "Paused" : "Idle"}
+                  {isAgentRunning
+                    ? "Running"
+                    : pendingCommandApprovals.length > 0
+                      ? "Paused"
+                      : formatRunOutcome(lastAgentRunOutcome)}
                 </strong>
               </article>
               <article className="agent-status-card">

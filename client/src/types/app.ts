@@ -141,6 +141,8 @@ export interface AgentPlan {
   approvalId?: string | null;
 }
 
+export type AgentRunOutcome = "completed" | "paused" | "cancelled";
+
 export interface AgentPlanStep {
   id: string;
   title: string;

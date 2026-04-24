@@ -279,6 +279,15 @@ pub struct RunPlanRequest {
 pub struct RunPlanResponse {
     pub plan: AgentPlan,
     pub summary: String,
+    pub outcome: AgentRunOutcome,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRunOutcome {
+    Completed,
+    Paused,
+    Cancelled,
 }
 
 #[derive(Debug, Serialize)]
