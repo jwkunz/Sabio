@@ -8,6 +8,7 @@ use chrono::Utc;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
 use super::{
@@ -23,6 +24,7 @@ use super::{
 };
 
 const MAX_STEP_ATTEMPTS: usize = 3;
+const CANCEL_POLL_INTERVAL_MS: u64 = 200;
 
 #[derive(Clone, Default)]
 pub struct AgentRunRegistry {
@@ -232,12 +234,14 @@ pub async fn run_approved_plan(
         {
             Ok(action) => action,
             Err(error) => {
-                let _ = storage::update_plan_step_status(
-                    session_id,
-                    &plan.id,
-                    &step.id,
-                    AgentPlanStepStatus::Failed,
-                );
+                if !run_lease.is_cancelled() {
+                    let _ = storage::update_plan_step_status(
+                        session_id,
+                        &plan.id,
+                        &step.id,
+                        AgentPlanStepStatus::Failed,
+                    );
+                }
                 return Err(error);
             }
         };
@@ -422,6 +426,38 @@ Step detail: {}
         .map_err(|error| agent_error(StatusCode::BAD_GATEWAY, error.to_string()))
 }
 
+async fn request_step_action_cancellable(
+    client: &Client,
+    ollama_base_url: &str,
+    model: &str,
+    session: &AgentSessionRecord,
+    plan: &AgentPlan,
+    step_id: &str,
+    step_title: &str,
+    step_detail: &str,
+    run_lease: &AgentRunLease,
+) -> Result<ModelStepAction, (StatusCode, Json<AgentApiError>)> {
+    let request_future = request_step_action(
+        client,
+        ollama_base_url,
+        model,
+        session,
+        plan,
+        step_title,
+        step_detail,
+    );
+    tokio::pin!(request_future);
+
+    loop {
+        tokio::select! {
+            result = &mut request_future => return result,
+            _ = sleep(Duration::from_millis(CANCEL_POLL_INTERVAL_MS)) => {
+                ensure_run_not_cancelled(&session.id, &plan.id, step_id, run_lease)?;
+            }
+        }
+    }
+}
+
 async fn run_step_with_retries(
     client: &Client,
     ollama_base_url: &str,
@@ -438,19 +474,24 @@ async fn run_step_with_retries(
 
     for attempt in 1..=MAX_STEP_ATTEMPTS {
         ensure_run_not_cancelled(session_id, &plan.id, step_id, run_lease)?;
-        let action = match request_step_action(
+        let action = match request_step_action_cancellable(
             client,
             ollama_base_url,
             model,
             session,
             plan,
+            step_id,
             step_title,
             step_detail,
+            run_lease,
         )
         .await
         {
             Ok(action) => action,
             Err(error) => {
+                if run_lease.is_cancelled() || is_cancelled_error(&error.1.detail) {
+                    return Err(error);
+                }
                 last_diagnostic = error.1.detail.clone();
                 if attempt < MAX_STEP_ATTEMPTS {
                     emit_retry_event(
@@ -746,6 +787,10 @@ fn emit_abort_event(
     .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
 
     Ok(())
+}
+
+fn is_cancelled_error(detail: &str) -> bool {
+    detail.trim() == "Agent run cancelled."
 }
 
 fn extract_json_object(raw: &str) -> Option<String> {

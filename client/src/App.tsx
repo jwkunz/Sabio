@@ -316,13 +316,32 @@ function App() {
       setAgentEvents([]);
       setAgentApprovals([]);
       setAgentPlans([]);
+      setIsAgentRunning(false);
       return;
     }
 
     void loadAgentEvents(selectedAgentSessionId);
     void loadAgentApprovals(selectedAgentSessionId);
     void loadAgentPlans(selectedAgentSessionId);
+    void loadAgentRunStatus(selectedAgentSessionId);
   }, [selectedAgentSessionId]);
+
+  useEffect(() => {
+    if (!selectedAgentSessionId || session.appMode !== "agent") {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void loadAgentRunStatus(selectedAgentSessionId);
+
+      if (isAgentRunning) {
+        void loadAgentEvents(selectedAgentSessionId);
+        void loadAgentPlans(selectedAgentSessionId);
+      }
+    }, 1200);
+
+    return () => window.clearInterval(interval);
+  }, [isAgentRunning, selectedAgentSessionId, session.appMode]);
 
   useEffect(() => {
     chatScrollRef.current?.scrollTo({
@@ -873,6 +892,22 @@ function App() {
       setAgentPlans(payload.plans);
     } catch (planError) {
       setAgentSessionStatus((planError as Error).message || "Unable to load plans.");
+    }
+  };
+
+  const loadAgentRunStatus = async (sessionId: string) => {
+    try {
+      const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/run/status`);
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Unable to load run status.");
+      }
+
+      const payload = (await response.json()) as { running?: boolean; cancelled?: boolean };
+      setIsAgentRunning(Boolean(payload.running));
+    } catch (runStatusError) {
+      setAgentSessionStatus((runStatusError as Error).message || "Unable to load run status.");
     }
   };
 
