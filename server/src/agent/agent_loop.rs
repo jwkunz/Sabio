@@ -339,6 +339,11 @@ pub async fn run_approved_plan(
         }),
     )
     .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
+    let _ = storage::update_memory_summary(
+        session_id,
+        &build_memory_entry(&plan.title, &summary, &commit_hashes),
+    )
+    .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
 
     let plan = storage::list_plans(session_id)
         .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?
@@ -383,10 +388,20 @@ Do not delete files.
 Workspace: {}
 Plan: {}
 Plan summary: {}
+Session memory summary: {}
 Step: {}
 Step detail: {}
 "#,
-        session.workspace_path, plan.title, plan.summary, step_title, step_detail
+        session.workspace_path,
+        plan.title,
+        plan.summary,
+        if session.memory_summary.trim().is_empty() {
+            "No prior memory."
+        } else {
+            session.memory_summary.trim()
+        },
+        step_title,
+        step_detail
     );
     let response = client
         .post(format!("{ollama_base_url}/api/generate"))
@@ -804,6 +819,32 @@ fn step_commit_message(step_title: &str) -> String {
     let title: String = title.chars().take(80).collect();
 
     format!("sabio(agent): {title}")
+}
+
+fn build_memory_entry(plan_title: &str, summary: &str, commit_hashes: &[String]) -> String {
+    let short_summary = summary
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(3)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let commit_summary = if commit_hashes.is_empty() {
+        "no commits".to_string()
+    } else {
+        format!("commits {}", commit_hashes.join(", "))
+    };
+
+    format!(
+        "- {}: {} ({})",
+        plan_title.trim(),
+        truncate_memory_text(&short_summary, 280),
+        commit_summary
+    )
+}
+
+fn truncate_memory_text(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
 }
 
 fn emit_retry_event(

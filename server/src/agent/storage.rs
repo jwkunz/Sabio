@@ -14,6 +14,7 @@ use super::types::{
 
 const MAX_EVENTS_PER_SESSION: usize = 500;
 const MAX_EVENT_PAYLOAD_CHARS: usize = 12_000;
+const MAX_MEMORY_SUMMARY_CHARS: usize = 4_000;
 
 pub fn list_sessions() -> Result<Vec<AgentSessionRecord>, String> {
     let sessions_dir = sessions_dir()?;
@@ -321,6 +322,51 @@ pub fn append_event(
     let event = push_event(&mut session, event_type, payload, None)?;
     write_session(&session)?;
     Ok(event)
+}
+
+pub fn update_memory_summary(session_id: &str, entry: &str) -> Result<AgentSessionRecord, String> {
+    let mut session = get_session(session_id)?;
+    let entry = entry.trim();
+
+    if entry.is_empty() {
+        return Ok(session);
+    }
+
+    let existing_entries = session
+        .memory_summary
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string);
+    let new_entries = entry
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string);
+    let mut merged = existing_entries.chain(new_entries).collect::<Vec<_>>();
+
+    if merged.len() > 8 {
+        let keep_from = merged.len() - 8;
+        merged.drain(0..keep_from);
+    }
+
+    let mut summary = merged.join("\n");
+    if summary.chars().count() > MAX_MEMORY_SUMMARY_CHARS {
+        let truncated = summary
+            .chars()
+            .rev()
+            .take(MAX_MEMORY_SUMMARY_CHARS)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+        summary = truncated;
+    }
+
+    session.memory_summary = summary;
+    session.updated_at = Utc::now().timestamp_millis();
+    write_session(&session)?;
+    Ok(session)
 }
 
 pub fn write_session(session: &AgentSessionRecord) -> Result<(), String> {

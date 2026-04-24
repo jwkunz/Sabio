@@ -80,6 +80,7 @@ export interface AgentSessionSummary {
   title: string;
   workspacePath: string;
   gitBranch?: string;
+  memorySummary: string;
   createdAt: number;
   updatedAt: number;
 }

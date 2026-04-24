@@ -1876,6 +1876,15 @@ function App() {
                 <strong>{recentAgentCommits.length}</strong>
               </article>
             </section>
+            {selectedAgentSession?.memorySummary ? (
+              <article className="agent-event">
+                <div className="message-meta">
+                  <span>Memory</span>
+                  <span>Session</span>
+                </div>
+                <pre className="agent-event-payload">{selectedAgentSession.memorySummary}</pre>
+              </article>
+            ) : null}
             {agentPlans.length > 0 ? (
               <section className="agent-plan-stack">
                 {agentPlans.map((plan) => {

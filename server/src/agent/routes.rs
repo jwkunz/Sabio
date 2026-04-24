@@ -656,6 +656,8 @@ struct ModelPlanStepDraft {
 }
 
 fn plan_prompt(session: &AgentSessionRecord, task: &str) -> String {
+    let memory_summary = session.memory_summary.trim();
+
     format!(
         r#"You are Sabio Agent Mode, a local coding agent planning work before execution.
 Return ONLY valid JSON with this shape:
@@ -670,10 +672,16 @@ Planning rules:
 
 Workspace: {}
 Git branch: {}
+Session memory summary: {}
 User task: {}
 "#,
         session.workspace_path,
         session.git_branch.as_deref().unwrap_or("unknown"),
+        if memory_summary.is_empty() {
+            "No prior memory."
+        } else {
+            memory_summary
+        },
         task
     )
 }

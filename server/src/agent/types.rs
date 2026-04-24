@@ -42,6 +42,7 @@ pub struct AgentSessionSummary {
     pub title: String,
     pub workspace_path: String,
     pub git_branch: Option<String>,
+    pub memory_summary: String,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -71,6 +72,7 @@ impl AgentSessionRecord {
             title: self.title.clone(),
             workspace_path: self.workspace_path.clone(),
             git_branch: self.git_branch.clone(),
+            memory_summary: self.memory_summary.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
         }
