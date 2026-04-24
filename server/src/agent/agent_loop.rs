@@ -14,8 +14,9 @@ use uuid::Uuid;
 use super::{
     storage,
     tools::{
-        execute_git_commit, execute_read_only_tool, execute_write_tool, AgentToolName,
-        GitCommitRequest, ToolExecutionRequest,
+        execute_command, execute_git_commit, execute_read_only_tool, execute_write_tool,
+        AgentToolName, CommandExecutionRequest, CommandExecutionResponse, GitCommitRequest,
+        ToolExecutionRequest, ToolExecutionResponse,
     },
     types::{
         AgentApiError, AgentApprovalStatus, AgentEventType, AgentPlan, AgentPlanStepStatus,
@@ -368,13 +369,15 @@ Allowed tool names:
 - search_text with args {{"pattern":"literal or regex","path":"optional/relative/path"}}
 - git_status with args {{}}
 - git_diff with args {{}}
+- run_command with args {{"command":"cargo","args":["check"],"cwd":".","timeoutSeconds":30}}
 - apply_patch with args {{"patch":"unified diff that applies cleanly with git apply"}}
 - write_file with args {{"path":"relative/file","content":"complete UTF-8 content"}}
 
 Choose exactly one tool that best advances this plan step.
 Prefer apply_patch for modifying existing files.
 Use write_file only for clearly bounded new files or full-file replacement.
-Do not request run_command or git_commit.
+Use run_command only for autonomous, workspace-scoped, non-network, non-destructive commands.
+Do not request git_commit.
 Do not delete files.
 
 Workspace: {}
@@ -544,11 +547,7 @@ async fn run_step_with_retries(
         .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
 
         let is_write_action = is_write_tool(&action.tool);
-        let output = execute_step_tool(ToolExecutionRequest {
-            workspace_path: session.workspace_path.clone(),
-            tool: action.tool.clone(),
-            args: action.args.clone(),
-        });
+        let output = execute_step_tool(session, &action).await;
         let output_ok = output.ok;
 
         let _ = storage::append_event(
@@ -605,6 +604,78 @@ async fn run_step_with_retries(
             format!("No progress after repeated step attempts: {last_diagnostic}")
         },
     ))
+}
+
+async fn execute_step_tool(
+    session: &AgentSessionRecord,
+    action: &ModelStepAction,
+) -> ToolExecutionResponse {
+    match action.tool {
+        AgentToolName::RunCommand => execute_step_command(session, &action.args).await,
+        _ => {
+            let request = ToolExecutionRequest {
+                workspace_path: session.workspace_path.clone(),
+                tool: action.tool.clone(),
+                args: action.args.clone(),
+            };
+
+            if is_write_tool(&action.tool) {
+                execute_write_tool(request)
+            } else {
+                execute_read_only_tool(request)
+            }
+        }
+    }
+}
+
+async fn execute_step_command(session: &AgentSessionRecord, args: &Value) -> ToolExecutionResponse {
+    let request = match serde_json::from_value::<CommandExecutionRequest>(json!({
+        "workspacePath": session.workspace_path,
+        "command": args.get("command").cloned().unwrap_or(Value::Null),
+        "args": args.get("args").cloned().unwrap_or_else(|| json!([])),
+        "cwd": args.get("cwd").cloned().unwrap_or_else(|| json!(".")),
+        "timeoutSeconds": args.get("timeoutSeconds").cloned().unwrap_or(Value::Null),
+    })) {
+        Ok(request) => request,
+        Err(error) => {
+            return ToolExecutionResponse {
+                ok: false,
+                tool: AgentToolName::RunCommand,
+                payload: json!({}),
+                errors: vec![format!("Invalid run_command args: {error}")],
+            };
+        }
+    };
+    let response = execute_command(request).await;
+
+    command_execution_to_tool_response(response)
+}
+
+fn command_execution_to_tool_response(response: CommandExecutionResponse) -> ToolExecutionResponse {
+    let ok = response.ok && !response.approval_required && !response.blocked;
+    let mut errors = response.errors.clone();
+
+    if response.approval_required && errors.is_empty() {
+        errors.push(
+            "Command requires approval and is not allowed inside the autonomous agent loop."
+                .to_string(),
+        );
+    }
+
+    ToolExecutionResponse {
+        ok,
+        tool: AgentToolName::RunCommand,
+        payload: json!({
+            "classification": response.classification,
+            "approvalRequired": response.approval_required,
+            "blocked": response.blocked,
+            "exitCode": response.exit_code,
+            "stdout": response.stdout,
+            "stderr": response.stderr,
+            "timedOut": response.timed_out,
+        }),
+        errors,
+    }
 }
 
 fn ensure_plan_approved(
@@ -701,14 +772,6 @@ fn workspace_has_changes(workspace_path: &str) -> Result<bool, (StatusCode, Json
         .any(|line| !line.trim().is_empty() && !line.starts_with("##")))
 }
 
-fn execute_step_tool(request: ToolExecutionRequest) -> super::tools::ToolExecutionResponse {
-    if is_write_tool(&request.tool) {
-        execute_write_tool(request)
-    } else {
-        execute_read_only_tool(request)
-    }
-}
-
 fn is_agent_loop_tool(tool: &AgentToolName) -> bool {
     matches!(
         tool,
@@ -717,6 +780,7 @@ fn is_agent_loop_tool(tool: &AgentToolName) -> bool {
             | AgentToolName::SearchText
             | AgentToolName::GitStatus
             | AgentToolName::GitDiff
+            | AgentToolName::RunCommand
             | AgentToolName::WriteFile
             | AgentToolName::ApplyPatch
     )
