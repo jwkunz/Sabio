@@ -235,6 +235,19 @@ pub async fn run_approved_plan(
         {
             Ok(action) => action,
             Err(error) => {
+                let _ = append_run_memory(
+                    session_id,
+                    &build_failure_memory_entry(
+                        &plan.title,
+                        Some(&step.title),
+                        &error.1.detail,
+                        if is_cancelled_error(&error.1.detail) {
+                            "cancelled"
+                        } else {
+                            "failed"
+                        },
+                    ),
+                );
                 if !run_lease.is_cancelled() {
                     let _ = storage::update_plan_step_status(
                         session_id,
@@ -279,6 +292,15 @@ pub async fn run_approved_plan(
                         "stderr": commit.stderr,
                         "errors": commit.errors,
                     }),
+                );
+                let _ = append_run_memory(
+                    session_id,
+                    &build_failure_memory_entry(
+                        &plan.title,
+                        Some(&step.title),
+                        "Unable to commit completed plan step.",
+                        "failed",
+                    ),
                 );
                 return Err(agent_error(
                     StatusCode::BAD_REQUEST,
@@ -363,6 +385,11 @@ async fn request_step_action(
     step_title: &str,
     step_detail: &str,
 ) -> Result<ModelStepAction, (StatusCode, Json<AgentApiError>)> {
+    let preferred_commands = if session.preferred_commands.is_empty() {
+        "None recorded.".to_string()
+    } else {
+        session.preferred_commands.join(", ")
+    };
     let prompt = format!(
         r#"You are Sabio Agent Mode running one step of an approved plan.
 Return ONLY valid JSON with this shape:
@@ -389,6 +416,7 @@ Workspace: {}
 Plan: {}
 Plan summary: {}
 Session memory summary: {}
+Preferred autonomous commands: {}
 Step: {}
 Step detail: {}
 "#,
@@ -400,6 +428,7 @@ Step detail: {}
         } else {
             session.memory_summary.trim()
         },
+        preferred_commands,
         step_title,
         step_detail
     );
@@ -492,11 +521,12 @@ async fn run_step_with_retries(
 
     for attempt in 1..=MAX_STEP_ATTEMPTS {
         ensure_run_not_cancelled(session_id, &plan.id, step_id, run_lease)?;
+        let latest_session = storage::get_session(session_id).unwrap_or_else(|_| session.clone());
         let action = match request_step_action_cancellable(
             client,
             ollama_base_url,
             model,
-            session,
+            &latest_session,
             plan,
             step_id,
             step_title,
@@ -594,6 +624,7 @@ async fn run_step_with_retries(
         }
 
         if output_ok {
+            remember_successful_command(session.id.as_str(), &action);
             return Ok(action);
         }
 
@@ -841,6 +872,83 @@ fn build_memory_entry(plan_title: &str, summary: &str, commit_hashes: &[String])
         truncate_memory_text(&short_summary, 280),
         commit_summary
     )
+}
+
+fn build_failure_memory_entry(
+    plan_title: &str,
+    step_title: Option<&str>,
+    diagnostic: &str,
+    outcome: &str,
+) -> String {
+    let mut detail = String::new();
+
+    if let Some(step_title) = step_title.map(str::trim).filter(|value| !value.is_empty()) {
+        detail.push_str("during ");
+        detail.push_str(step_title);
+        detail.push_str(": ");
+    }
+
+    detail.push_str(&truncate_memory_text(diagnostic.trim(), 220));
+
+    format!(
+        "- {}: {} ({})",
+        plan_title.trim(),
+        detail,
+        outcome.trim()
+    )
+}
+
+fn append_run_memory(
+    session_id: &str,
+    entry: &str,
+) -> Result<(), (StatusCode, Json<AgentApiError>)> {
+    storage::update_memory_summary(session_id, entry)
+        .map(|_| ())
+        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))
+}
+
+fn remember_successful_command(session_id: &str, action: &ModelStepAction) {
+    if !matches!(action.tool, AgentToolName::RunCommand) {
+        return;
+    }
+
+    if let Some(command_entry) = build_command_preference(&action.args) {
+        let _ = storage::update_preferred_commands(session_id, &command_entry);
+    }
+}
+
+fn build_command_preference(args: &Value) -> Option<String> {
+    let command = args.get("command")?.as_str()?.trim();
+
+    if command.is_empty() {
+        return None;
+    }
+
+    let command_args = args
+        .get("args")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    let cwd = args
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != ".");
+
+    let mut parts = vec![command.to_string()];
+    parts.extend(command_args.into_iter().map(ToString::to_string));
+    let mut entry = parts.join(" ");
+
+    if let Some(cwd) = cwd {
+        entry.push_str(" @ ");
+        entry.push_str(cwd);
+    }
+
+    Some(truncate_memory_text(&entry, 140))
 }
 
 fn truncate_memory_text(value: &str, max_chars: usize) -> String {

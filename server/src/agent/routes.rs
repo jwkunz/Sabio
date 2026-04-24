@@ -657,6 +657,11 @@ struct ModelPlanStepDraft {
 
 fn plan_prompt(session: &AgentSessionRecord, task: &str) -> String {
     let memory_summary = session.memory_summary.trim();
+    let preferred_commands = if session.preferred_commands.is_empty() {
+        "None recorded.".to_string()
+    } else {
+        session.preferred_commands.join(", ")
+    };
 
     format!(
         r#"You are Sabio Agent Mode, a local coding agent planning work before execution.
@@ -673,6 +678,7 @@ Planning rules:
 Workspace: {}
 Git branch: {}
 Session memory summary: {}
+Preferred autonomous commands: {}
 User task: {}
 "#,
         session.workspace_path,
@@ -682,6 +688,7 @@ User task: {}
         } else {
             memory_summary
         },
+        preferred_commands,
         task
     )
 }

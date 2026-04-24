@@ -15,6 +15,7 @@ use super::types::{
 const MAX_EVENTS_PER_SESSION: usize = 500;
 const MAX_EVENT_PAYLOAD_CHARS: usize = 12_000;
 const MAX_MEMORY_SUMMARY_CHARS: usize = 4_000;
+const MAX_PREFERRED_COMMANDS: usize = 8;
 
 pub fn list_sessions() -> Result<Vec<AgentSessionRecord>, String> {
     let sessions_dir = sessions_dir()?;
@@ -364,6 +365,32 @@ pub fn update_memory_summary(session_id: &str, entry: &str) -> Result<AgentSessi
     }
 
     session.memory_summary = summary;
+    session.updated_at = Utc::now().timestamp_millis();
+    write_session(&session)?;
+    Ok(session)
+}
+
+pub fn update_preferred_commands(
+    session_id: &str,
+    command_entry: &str,
+) -> Result<AgentSessionRecord, String> {
+    let mut session = get_session(session_id)?;
+    let command_entry = command_entry.trim();
+
+    if command_entry.is_empty() {
+        return Ok(session);
+    }
+
+    session
+        .preferred_commands
+        .retain(|entry| entry.trim() != command_entry);
+    session.preferred_commands.push(command_entry.to_string());
+
+    if session.preferred_commands.len() > MAX_PREFERRED_COMMANDS {
+        let keep_from = session.preferred_commands.len() - MAX_PREFERRED_COMMANDS;
+        session.preferred_commands.drain(0..keep_from);
+    }
+
     session.updated_at = Utc::now().timestamp_millis();
     write_session(&session)?;
     Ok(session)

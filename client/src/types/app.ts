@@ -81,6 +81,7 @@ export interface AgentSessionSummary {
   workspacePath: string;
   gitBranch?: string;
   memorySummary: string;
+  preferredCommands: string[];
   createdAt: number;
   updatedAt: number;
 }

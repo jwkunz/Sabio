@@ -35,7 +35,7 @@ pub enum AgentCapability {
     AgentLoop,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionSummary {
     pub id: String,
@@ -43,11 +43,12 @@ pub struct AgentSessionSummary {
     pub workspace_path: String,
     pub git_branch: Option<String>,
     pub memory_summary: String,
+    pub preferred_commands: Vec<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionRecord {
     pub id: String,
@@ -73,6 +74,7 @@ impl AgentSessionRecord {
             workspace_path: self.workspace_path.clone(),
             git_branch: self.git_branch.clone(),
             memory_summary: self.memory_summary.clone(),
+            preferred_commands: self.preferred_commands.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
         }

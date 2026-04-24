@@ -1161,6 +1161,7 @@ function App() {
 
       const payload = (await response.json()) as { summary: string };
       await Promise.all([
+        loadAgentSessions(session.agentWorkspace.canonicalPath),
         loadAgentPlans(selectedAgentSessionId),
         loadAgentApprovals(selectedAgentSessionId),
         loadAgentEvents(selectedAgentSessionId)
@@ -1169,6 +1170,7 @@ function App() {
     } catch (runError) {
       setAgentSessionStatus((runError as Error).message || "Unable to run agent plan.");
       await Promise.all([
+        loadAgentSessions(session.agentWorkspace.canonicalPath),
         loadAgentPlans(selectedAgentSessionId),
         loadAgentApprovals(selectedAgentSessionId),
         loadAgentEvents(selectedAgentSessionId)
@@ -1199,7 +1201,10 @@ function App() {
       }
 
       setAgentSessionStatus(payload?.message || "Cancellation requested.");
-      await loadAgentEvents(selectedAgentSessionId);
+      await Promise.all([
+        loadAgentSessions(session.agentWorkspace.canonicalPath),
+        loadAgentEvents(selectedAgentSessionId)
+      ]);
     } catch (cancelError) {
       setAgentSessionStatus((cancelError as Error).message || "Unable to cancel agent run.");
     }
@@ -1883,6 +1888,15 @@ function App() {
                   <span>Session</span>
                 </div>
                 <pre className="agent-event-payload">{selectedAgentSession.memorySummary}</pre>
+              </article>
+            ) : null}
+            {selectedAgentSession?.preferredCommands?.length ? (
+              <article className="agent-event">
+                <div className="message-meta">
+                  <span>Autonomous Commands</span>
+                  <span>Session</span>
+                </div>
+                <pre className="agent-event-payload">{selectedAgentSession.preferredCommands.join("\n")}</pre>
               </article>
             ) : null}
             {agentPlans.length > 0 ? (
