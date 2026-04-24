@@ -24,6 +24,7 @@ use super::tools::{
     execute_command, execute_git_commit, execute_read_only_tool, execute_write_tool,
     preview_command, tool_specs, validate_tool_call, AgentToolName, CommandClassification,
     CommandExecutionRequest, GitCommitRequest, ToolCallValidationRequest, ToolExecutionRequest,
+    command_approval_payload,
 };
 use super::types::{
     AgentApiError, AgentApprovalKind, AgentApprovalsResponse, AgentCapability, AgentEventsResponse,
@@ -432,8 +433,7 @@ async fn request_command_approval(
         AgentApprovalKind::Plan => "Plan requires approval.",
     }
     .to_string();
-    let payload = serde_json::to_value(&request)
-        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error.to_string()))?;
+    let payload = command_approval_payload(&request);
 
     storage::create_approval(&session_id, kind, title, detail, payload)
         .map(Json)

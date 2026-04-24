@@ -96,7 +96,7 @@ pub struct GitCommitResponse {
     pub errors: Vec<String>,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandClassification {
     Autonomous,
@@ -378,11 +378,23 @@ pub fn execute_git_commit(workspace_path: &str, request: GitCommitRequest) -> Gi
 }
 
 pub async fn execute_command(request: CommandExecutionRequest) -> CommandExecutionResponse {
+    execute_command_with_policy(request, false).await
+}
+
+pub async fn execute_approved_command(request: CommandExecutionRequest) -> CommandExecutionResponse {
+    execute_command_with_policy(request, true).await
+}
+
+async fn execute_command_with_policy(
+    request: CommandExecutionRequest,
+    allow_approval_required: bool,
+) -> CommandExecutionResponse {
     let preview = preview_command(&request);
 
     if !preview.errors.is_empty() {
-        return command_response(
+        return command_response_with_approval(
             preview.classification,
+            false,
             true,
             None,
             String::new(),
@@ -395,8 +407,9 @@ pub async fn execute_command(request: CommandExecutionRequest) -> CommandExecuti
     let classification = preview.classification;
 
     if classification == CommandClassification::Blocked {
-        return command_response(
+        return command_response_with_approval(
             classification,
+            false,
             true,
             None,
             String::new(),
@@ -406,9 +419,10 @@ pub async fn execute_command(request: CommandExecutionRequest) -> CommandExecuti
         );
     }
 
-    if classification != CommandClassification::Autonomous {
-        return command_response(
+    if classification != CommandClassification::Autonomous && !allow_approval_required {
+        return command_response_with_approval(
             classification,
+            true,
             true,
             None,
             String::new(),
@@ -421,8 +435,9 @@ pub async fn execute_command(request: CommandExecutionRequest) -> CommandExecuti
     let workspace_root = match canonical_workspace_root(&request.workspace_path) {
         Ok(path) => path,
         Err(error) => {
-            return command_response(
+            return command_response_with_approval(
                 CommandClassification::Blocked,
+                false,
                 true,
                 None,
                 String::new(),
@@ -435,8 +450,9 @@ pub async fn execute_command(request: CommandExecutionRequest) -> CommandExecuti
     let cwd = match contained_existing_path(&workspace_root, &request.cwd) {
         Ok(path) => path,
         Err(error) => {
-            return command_response(
+            return command_response_with_approval(
                 CommandClassification::Blocked,
+                false,
                 true,
                 None,
                 String::new(),
@@ -448,8 +464,9 @@ pub async fn execute_command(request: CommandExecutionRequest) -> CommandExecuti
     };
 
     if !cwd.is_dir() {
-        return command_response(
+        return command_response_with_approval(
             CommandClassification::Blocked,
+            false,
             true,
             None,
             String::new(),
@@ -475,8 +492,9 @@ pub async fn execute_command(request: CommandExecutionRequest) -> CommandExecuti
     {
         Ok(child) => child,
         Err(error) => {
-            return command_response(
+            return command_response_with_approval(
                 classification,
+                false,
                 false,
                 None,
                 String::new(),
@@ -493,8 +511,9 @@ pub async fn execute_command(request: CommandExecutionRequest) -> CommandExecuti
     )
     .await
     {
-        Ok(Ok(output)) => command_response(
+        Ok(Ok(output)) => command_response_with_approval(
             classification,
+            false,
             false,
             output.status.code(),
             capped_output(&String::from_utf8_lossy(&output.stdout)),
@@ -502,8 +521,9 @@ pub async fn execute_command(request: CommandExecutionRequest) -> CommandExecuti
             false,
             Vec::new(),
         ),
-        Ok(Err(error)) => command_response(
+        Ok(Err(error)) => command_response_with_approval(
             classification,
+            false,
             false,
             None,
             String::new(),
@@ -511,8 +531,9 @@ pub async fn execute_command(request: CommandExecutionRequest) -> CommandExecuti
             false,
             vec![format!("Command failed while waiting for output: {error}")],
         ),
-        Err(_) => command_response(
+        Err(_) => command_response_with_approval(
             classification,
+            false,
             false,
             None,
             String::new(),
@@ -572,6 +593,21 @@ pub fn preview_command(request: &CommandExecutionRequest) -> CommandExecutionRes
         false,
         errors,
     )
+}
+
+pub fn command_approval_payload(request: &CommandExecutionRequest) -> Value {
+    let normalized_cwd = canonical_workspace_root(&request.workspace_path)
+        .ok()
+        .and_then(|workspace_root| contained_existing_path(&workspace_root, &request.cwd).ok())
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_else(|| request.cwd.trim().to_string());
+
+    json!({
+        "workspacePath": request.workspace_path,
+        "command": request.command,
+        "args": request.args,
+        "cwd": normalized_cwd,
+    })
 }
 
 fn execute_list_files(workspace_root: &Path, args: &Value) -> Result<Value, String> {
@@ -1054,6 +1090,28 @@ fn command_response(
         CommandClassification::NetworkApprovalRequired
             | CommandClassification::DestructiveApprovalRequired
     );
+    command_response_with_approval(
+        classification,
+        approval_required,
+        blocked,
+        exit_code,
+        stdout,
+        stderr,
+        timed_out,
+        errors,
+    )
+}
+
+fn command_response_with_approval(
+    classification: CommandClassification,
+    approval_required: bool,
+    blocked: bool,
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    timed_out: bool,
+    errors: Vec<String>,
+) -> CommandExecutionResponse {
     let ok =
         errors.is_empty() && !blocked && !approval_required && !timed_out && exit_code == Some(0);
 

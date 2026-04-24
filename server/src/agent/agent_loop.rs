@@ -14,18 +14,21 @@ use uuid::Uuid;
 use super::{
     storage,
     tools::{
-        execute_command, execute_git_commit, execute_read_only_tool, execute_write_tool,
-        AgentToolName, CommandExecutionRequest, CommandExecutionResponse, GitCommitRequest,
-        ToolExecutionRequest, ToolExecutionResponse,
+        execute_approved_command, execute_command, execute_git_commit, execute_read_only_tool,
+        execute_write_tool, preview_command, AgentToolName, CommandClassification,
+        CommandExecutionRequest, CommandExecutionResponse, GitCommitRequest, ToolExecutionRequest,
+        ToolExecutionResponse, command_approval_payload,
     },
     types::{
-        AgentApiError, AgentApprovalStatus, AgentEventType, AgentPlan, AgentPlanStepStatus,
-        AgentRunStatusResponse, AgentSessionRecord, CancelRunResponse, RunPlanResponse,
+        AgentApiError, AgentApproval, AgentApprovalKind, AgentApprovalStatus, AgentEventType,
+        AgentPlan, AgentPlanStepStatus, AgentRunStatusResponse, AgentSessionRecord,
+        CancelRunResponse, RunPlanResponse,
     },
 };
 
 const MAX_STEP_ATTEMPTS: usize = 3;
 const CANCEL_POLL_INTERVAL_MS: u64 = 200;
+const APPROVAL_PAUSE_PREFIX: &str = "Agent paused pending approval:";
 
 #[derive(Clone, Default)]
 pub struct AgentRunRegistry {
@@ -168,6 +171,14 @@ struct ModelStepAction {
     note: Option<String>,
 }
 
+enum StepToolOutcome {
+    Completed(ToolExecutionResponse),
+    ApprovalRequested {
+        response: ToolExecutionResponse,
+        message: String,
+    },
+}
+
 pub async fn run_approved_plan(
     registry: &AgentRunRegistry,
     client: &Client,
@@ -235,6 +246,15 @@ pub async fn run_approved_plan(
         {
             Ok(action) => action,
             Err(error) => {
+                if is_approval_pause_error(&error.1.detail) {
+                    let _ = storage::update_plan_step_status(
+                        session_id,
+                        &plan.id,
+                        &step.id,
+                        AgentPlanStepStatus::Pending,
+                    );
+                    return Err(error);
+                }
                 let _ = append_run_memory(
                     session_id,
                     &build_failure_memory_entry(
@@ -408,7 +428,7 @@ Allowed tool names:
 Choose exactly one tool that best advances this plan step.
 Prefer apply_patch for modifying existing files.
 Use write_file only for clearly bounded new files or full-file replacement.
-Use run_command only for autonomous, workspace-scoped, non-network, non-destructive commands.
+Use run_command for workspace-scoped commands. If a necessary command requires network or destructive approval, Sabio will pause and request approval before continuing.
 Do not request git_commit.
 Do not delete files.
 
@@ -592,7 +612,11 @@ async fn run_step_with_retries(
         .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
 
         let is_write_action = is_write_tool(&action.tool);
-        let output = execute_step_tool(session, &action).await;
+        let outcome = execute_step_tool(&latest_session, plan, step_id, &action).await;
+        let (output, approval_pause_message) = match outcome {
+            StepToolOutcome::Completed(output) => (output, None),
+            StepToolOutcome::ApprovalRequested { response, message } => (response, Some(message)),
+        };
         let output_ok = output.ok;
 
         let _ = storage::append_event(
@@ -628,6 +652,10 @@ async fn run_step_with_retries(
             return Ok(action);
         }
 
+        if let Some(message) = approval_pause_message {
+            return Err(agent_error(StatusCode::CONFLICT, message));
+        }
+
         last_diagnostic = output.errors.join("; ");
         if attempt < MAX_STEP_ATTEMPTS {
             emit_retry_event(
@@ -654,10 +682,14 @@ async fn run_step_with_retries(
 
 async fn execute_step_tool(
     session: &AgentSessionRecord,
+    plan: &AgentPlan,
+    step_id: &str,
     action: &ModelStepAction,
-) -> ToolExecutionResponse {
+) -> StepToolOutcome {
     match action.tool {
-        AgentToolName::RunCommand => execute_step_command(session, &action.args).await,
+        AgentToolName::RunCommand => {
+            execute_step_command(session, plan, step_id, &action.args).await
+        }
         _ => {
             let request = ToolExecutionRequest {
                 workspace_path: session.workspace_path.clone(),
@@ -666,15 +698,20 @@ async fn execute_step_tool(
             };
 
             if is_write_tool(&action.tool) {
-                execute_write_tool(request)
+                StepToolOutcome::Completed(execute_write_tool(request))
             } else {
-                execute_read_only_tool(request)
+                StepToolOutcome::Completed(execute_read_only_tool(request))
             }
         }
     }
 }
 
-async fn execute_step_command(session: &AgentSessionRecord, args: &Value) -> ToolExecutionResponse {
+async fn execute_step_command(
+    session: &AgentSessionRecord,
+    plan: &AgentPlan,
+    step_id: &str,
+    args: &Value,
+) -> StepToolOutcome {
     let request = match serde_json::from_value::<CommandExecutionRequest>(json!({
         "workspacePath": session.workspace_path,
         "command": args.get("command").cloned().unwrap_or(Value::Null),
@@ -684,17 +721,96 @@ async fn execute_step_command(session: &AgentSessionRecord, args: &Value) -> Too
     })) {
         Ok(request) => request,
         Err(error) => {
-            return ToolExecutionResponse {
+            return StepToolOutcome::Completed(ToolExecutionResponse {
                 ok: false,
                 tool: AgentToolName::RunCommand,
                 payload: json!({}),
                 errors: vec![format!("Invalid run_command args: {error}")],
-            };
+            });
         }
     };
-    let response = execute_command(request).await;
+    let preview = preview_command(&request);
 
-    command_execution_to_tool_response(response)
+    if preview.blocked || !preview.approval_required {
+        let response = execute_command(request).await;
+        return StepToolOutcome::Completed(command_execution_to_tool_response(response));
+    }
+
+    if let Some(approval) = find_matching_command_approval(session, &request) {
+        return match approval.status {
+            AgentApprovalStatus::Approved => {
+                let response = execute_approved_command(request).await;
+                StepToolOutcome::Completed(command_execution_to_tool_response(response))
+            }
+            AgentApprovalStatus::Pending => {
+                let message = format!(
+                    "{APPROVAL_PAUSE_PREFIX} Resolve pending approval '{}' and rerun the plan.",
+                    approval.title
+                );
+                StepToolOutcome::ApprovalRequested {
+                    response: command_approval_response(preview.classification, &approval, false),
+                    message,
+                }
+            }
+            AgentApprovalStatus::Rejected => StepToolOutcome::Completed(ToolExecutionResponse {
+                ok: false,
+                tool: AgentToolName::RunCommand,
+                payload: json!({
+                    "classification": preview.classification,
+                    "approvalId": approval.id,
+                    "approvalStatus": approval.status,
+                }),
+                errors: vec![format!(
+                    "Command approval '{}' was rejected.",
+                    approval.title
+                )],
+            }),
+        };
+    }
+
+    let kind = match preview.classification {
+        CommandClassification::NetworkApprovalRequired => AgentApprovalKind::NetworkCommand,
+        CommandClassification::DestructiveApprovalRequired => AgentApprovalKind::DestructiveCommand,
+        CommandClassification::Autonomous | CommandClassification::Blocked => {
+            let response = execute_command(request).await;
+            return StepToolOutcome::Completed(command_execution_to_tool_response(response));
+        }
+    };
+    let title = format!("{} {}", request.command, request.args.join(" "))
+        .trim()
+        .to_string();
+    let detail = format!(
+        "{} approval required before the agent can continue plan '{}' step '{}'.",
+        match kind {
+            AgentApprovalKind::NetworkCommand => "Network command",
+            AgentApprovalKind::DestructiveCommand => "Destructive command",
+            AgentApprovalKind::FileDeletion => "File deletion",
+            AgentApprovalKind::Plan => "Plan",
+        },
+        plan.title,
+        step_id
+    );
+    let payload = command_approval_payload(&request);
+    let approval = match storage::create_approval(&session.id, kind, title, detail, payload) {
+        Ok(approval) => approval,
+        Err(error) => {
+            return StepToolOutcome::Completed(ToolExecutionResponse {
+                ok: false,
+                tool: AgentToolName::RunCommand,
+                payload: json!({}),
+                errors: vec![error],
+            });
+        }
+    };
+    let message = format!(
+        "{APPROVAL_PAUSE_PREFIX} Approve '{}' and rerun the plan.",
+        approval.title
+    );
+
+    StepToolOutcome::ApprovalRequested {
+        response: command_approval_response(preview.classification, &approval, true),
+        message,
+    }
 }
 
 fn command_execution_to_tool_response(response: CommandExecutionResponse) -> ToolExecutionResponse {
@@ -722,6 +838,56 @@ fn command_execution_to_tool_response(response: CommandExecutionResponse) -> Too
         }),
         errors,
     }
+}
+
+fn command_approval_response(
+    classification: CommandClassification,
+    approval: &AgentApproval,
+    created_now: bool,
+) -> ToolExecutionResponse {
+    ToolExecutionResponse {
+        ok: false,
+        tool: AgentToolName::RunCommand,
+        payload: json!({
+            "classification": classification,
+            "approvalRequired": true,
+            "approvalId": approval.id,
+            "approvalStatus": approval.status,
+            "approvalKind": approval.kind,
+            "createdNow": created_now,
+        }),
+        errors: vec![format!(
+            "Command requires approval before execution. Resolve approval '{}'.",
+            approval.title
+        )],
+    }
+}
+
+fn find_matching_command_approval(
+    session: &AgentSessionRecord,
+    request: &CommandExecutionRequest,
+) -> Option<AgentApproval> {
+    let payload = command_approval_payload(request);
+    let mut matched = session
+        .approvals
+        .iter()
+        .rev()
+        .filter(|approval| {
+            matches!(
+                approval.kind,
+                AgentApprovalKind::NetworkCommand | AgentApprovalKind::DestructiveCommand
+            ) && approval.payload == payload
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    matched.sort_by_key(|approval| match approval.status {
+        AgentApprovalStatus::Approved => 0,
+        AgentApprovalStatus::Pending => 1,
+        AgentApprovalStatus::Rejected => 2,
+    });
+
+    matched.into_iter().next()
 }
 
 fn ensure_plan_approved(
@@ -1004,6 +1170,10 @@ fn emit_abort_event(
 
 fn is_cancelled_error(detail: &str) -> bool {
     detail.trim() == "Agent run cancelled."
+}
+
+fn is_approval_pause_error(detail: &str) -> bool {
+    detail.trim().starts_with(APPROVAL_PAUSE_PREFIX)
 }
 
 fn extract_json_object(raw: &str) -> Option<String> {
