@@ -314,6 +314,23 @@ function App() {
     () => (activeCommandApproval ? findApprovalPlanStep(activeCommandApproval) : { planId: "", stepId: "" }),
     [activeCommandApproval]
   );
+  const resumableAgentPlan = useMemo(() => {
+    if (activeApprovalTarget.planId) {
+      return (
+        agentPlans.find((plan) => {
+          if (plan.id !== activeApprovalTarget.planId) {
+            return false;
+          }
+
+          const approval = agentApprovals.find((entry) => entry.id === plan.approvalId);
+          const hasRemainingSteps = plan.steps.some((step) => step.status !== "completed");
+          return approval?.status === "approved" && hasRemainingSteps;
+        }) ?? null
+      );
+    }
+
+    return null;
+  }, [activeApprovalTarget.planId, agentApprovals, agentPlans]);
   const runnableAgentPlan = useMemo(
     () =>
       agentPlans.find((plan) => {
@@ -323,6 +340,7 @@ function App() {
       }) ?? null,
     [agentApprovals, agentPlans]
   );
+  const activeRunnablePlan = resumableAgentPlan ?? runnableAgentPlan;
   const commandLogEntries = useMemo(
     () =>
       agentEvents
@@ -1202,18 +1220,22 @@ function App() {
       return;
     }
 
-    if (!runnableAgentPlan) {
+    if (!activeRunnablePlan) {
       setAgentSessionStatus("Approve a plan before running the agent.");
       return;
     }
 
-    setAgentSessionStatus(`Running approved plan: ${runnableAgentPlan.title}`);
+    setAgentSessionStatus(
+      pendingCommandApprovals.length > 0
+        ? `Resuming approved plan: ${activeRunnablePlan.title}`
+        : `Running approved plan: ${activeRunnablePlan.title}`
+    );
     setIsAgentRunning(true);
 
     try {
       const response = await fetch(
         `/api/agent/sessions/${encodeURIComponent(selectedAgentSessionId)}/plans/${encodeURIComponent(
-          runnableAgentPlan.id
+          activeRunnablePlan.id
         )}/run`,
         {
           method: "POST",
@@ -1318,15 +1340,16 @@ function App() {
       const isCommandApproval =
         approval?.kind === "network_command" || approval?.kind === "destructive_command";
       const approvalContext = approval ? formatApprovalContext(approval) : "";
+      const approvalCommand = approval ? formatApprovalCommand(approval) : "";
       setAgentSessionStatus(
         approved
           ? isCommandApproval
             ? approvalContext
-              ? `Approval accepted for ${approvalContext}. Rerun the agent to continue.`
-              : "Approval accepted. Rerun the agent to continue the paused step."
+              ? `Approval accepted for ${approvalContext}. Resume the agent to run ${approvalCommand || "the blocked command"}.`
+              : "Approval accepted. Resume the agent to continue the paused step."
             : "Approval accepted."
           : approvalContext
-            ? `Approval rejected for ${approvalContext}.`
+            ? `Approval rejected for ${approvalContext}.${approvalCommand ? ` Command: ${approvalCommand}.` : ""}`
             : "Approval rejected."
       );
     } catch (approvalError) {
@@ -1960,13 +1983,16 @@ function App() {
               <article className="agent-event agent-paused-banner">
                 <div className="message-meta">
                   <span>Paused</span>
-                  <span>Approval required</span>
-                </div>
-                <p>{formatApprovalContext(activeCommandApproval) || "A command approval is blocking the current plan."}</p>
-                <span className="agent-event-detail">
+                <span>Approval required</span>
+              </div>
+              <p>{formatApprovalContext(activeCommandApproval) || "A command approval is blocking the current plan."}</p>
+              <span className="agent-event-detail">
                   {formatApprovalCommand(activeCommandApproval) || activeCommandApproval.title}
-                </span>
-              </article>
+              </span>
+              <span className="agent-event-detail">
+                Approve this command, then use `Resume agent` to continue the blocked step.
+              </span>
+            </article>
             ) : null}
             <section className="agent-run-strip">
               <article className="agent-status-card">
@@ -1981,7 +2007,7 @@ function App() {
               </article>
               <article className="agent-status-card">
                 <span>Ready plan</span>
-                <strong>{runnableAgentPlan?.title || "No approved plan"}</strong>
+                <strong>{activeRunnablePlan?.title || "No approved plan"}</strong>
               </article>
               <article className="agent-status-card">
                 <span>Pending approvals</span>
@@ -2185,7 +2211,7 @@ function App() {
                 <button
                   type="button"
                   onClick={() => void runAgentPlan()}
-                  disabled={!selectedAgentSessionId || !session.selectedModel || !runnableAgentPlan || isAgentRunning}
+                  disabled={!selectedAgentSessionId || !session.selectedModel || !activeRunnablePlan || isAgentRunning}
                 >
                   {pendingCommandApprovals.length > 0 ? "Resume agent" : "Run agent"}
                 </button>
