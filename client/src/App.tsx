@@ -300,6 +300,7 @@ function App() {
       ),
     [agentApprovals]
   );
+  const activeCommandApproval = useMemo(() => pendingCommandApprovals[0] ?? null, [pendingCommandApprovals]);
   const runnableAgentPlan = useMemo(
     () =>
       agentPlans.find((plan) => {
@@ -1935,6 +1936,18 @@ function App() {
                   <span>Status</span>
                 </div>
                 <p>{agentSessionStatus}</p>
+              </article>
+            ) : null}
+            {activeCommandApproval ? (
+              <article className="agent-event agent-paused-banner">
+                <div className="message-meta">
+                  <span>Paused</span>
+                  <span>Approval required</span>
+                </div>
+                <p>{formatApprovalContext(activeCommandApproval) || "A command approval is blocking the current plan."}</p>
+                <span className="agent-event-detail">
+                  {formatApprovalCommand(activeCommandApproval) || activeCommandApproval.title}
+                </span>
               </article>
             ) : null}
             <section className="agent-run-strip">

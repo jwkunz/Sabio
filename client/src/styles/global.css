@@ -729,6 +729,11 @@ button:disabled {
   width: min(92%, 860px);
 }
 
+.agent-paused-banner {
+  border-color: rgba(255, 198, 109, 0.4);
+  background: rgba(255, 198, 109, 0.08);
+}
+
 .agent-event p {
   margin: 0;
 }
