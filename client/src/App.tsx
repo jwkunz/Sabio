@@ -116,6 +116,15 @@ const formatApprovalContext = (approval: AgentApproval) => {
   return stepTitle;
 };
 
+const findApprovalPlanStep = (approval: AgentApproval) => {
+  const payload = approval.payload ?? {};
+
+  return {
+    planId: readAgentString(payload.planId),
+    stepId: readAgentString(payload.stepId)
+  };
+};
+
 const summarizeAgentEvent = (event: AgentEvent) => {
   const payload = event.payload ?? {};
   const tool = readAgentString(payload.tool);
@@ -301,6 +310,10 @@ function App() {
     [agentApprovals]
   );
   const activeCommandApproval = useMemo(() => pendingCommandApprovals[0] ?? null, [pendingCommandApprovals]);
+  const activeApprovalTarget = useMemo(
+    () => (activeCommandApproval ? findApprovalPlanStep(activeCommandApproval) : { planId: "", stepId: "" }),
+    [activeCommandApproval]
+  );
   const runnableAgentPlan = useMemo(
     () =>
       agentPlans.find((plan) => {
@@ -1304,12 +1317,17 @@ function App() {
       const approval = agentApprovals.find((entry) => entry.id === approvalId);
       const isCommandApproval =
         approval?.kind === "network_command" || approval?.kind === "destructive_command";
+      const approvalContext = approval ? formatApprovalContext(approval) : "";
       setAgentSessionStatus(
         approved
           ? isCommandApproval
-            ? "Approval accepted. Rerun the agent to continue the paused step."
+            ? approvalContext
+              ? `Approval accepted for ${approvalContext}. Rerun the agent to continue.`
+              : "Approval accepted. Rerun the agent to continue the paused step."
             : "Approval accepted."
-          : "Approval rejected."
+          : approvalContext
+            ? `Approval rejected for ${approvalContext}.`
+            : "Approval rejected."
       );
     } catch (approvalError) {
       setAgentSessionStatus((approvalError as Error).message || "Unable to resolve approval.");
@@ -2007,7 +2025,14 @@ function App() {
                       {plan.summary ? <p>{plan.summary}</p> : null}
                       <ol>
                         {plan.steps.map((step) => (
-                          <li key={step.id}>
+                          <li
+                            key={step.id}
+                            className={
+                              activeApprovalTarget.planId === plan.id && activeApprovalTarget.stepId === step.id
+                                ? "agent-plan-step is-blocked"
+                                : "agent-plan-step"
+                            }
+                          >
                             <strong>{step.title}</strong>
                             <span className="agent-step-status">{formatAgentEventType(step.status)}</span>
                             {step.detail ? <span>{step.detail}</span> : null}

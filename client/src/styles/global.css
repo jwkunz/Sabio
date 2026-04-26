@@ -794,6 +794,11 @@ button:disabled {
   margin-bottom: 0.75rem;
 }
 
+.agent-plan-step.is-blocked {
+  border-left: 3px solid rgba(255, 198, 109, 0.7);
+  padding-left: 0.75rem;
+}
+
 .agent-plan-card li strong,
 .agent-plan-card li span {
   display: block;
