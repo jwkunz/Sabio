@@ -433,7 +433,7 @@ async fn request_command_approval(
         AgentApprovalKind::Plan => "Plan requires approval.",
     }
     .to_string();
-    let payload = command_approval_payload(&request);
+    let payload = command_approval_payload(&request, None, None, None, None);
 
     storage::create_approval(&session_id, kind, title, detail, payload)
         .map(Json)

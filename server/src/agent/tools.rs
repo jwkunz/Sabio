@@ -595,7 +595,13 @@ pub fn preview_command(request: &CommandExecutionRequest) -> CommandExecutionRes
     )
 }
 
-pub fn command_approval_payload(request: &CommandExecutionRequest) -> Value {
+pub fn command_approval_payload(
+    request: &CommandExecutionRequest,
+    plan_id: Option<&str>,
+    plan_title: Option<&str>,
+    step_id: Option<&str>,
+    step_title: Option<&str>,
+) -> Value {
     let normalized_cwd = canonical_workspace_root(&request.workspace_path)
         .ok()
         .and_then(|workspace_root| contained_existing_path(&workspace_root, &request.cwd).ok())
@@ -607,6 +613,10 @@ pub fn command_approval_payload(request: &CommandExecutionRequest) -> Value {
         "command": request.command,
         "args": request.args,
         "cwd": normalized_cwd,
+        "planId": plan_id,
+        "planTitle": plan_title,
+        "stepId": step_id,
+        "stepTitle": step_title,
     })
 }
 

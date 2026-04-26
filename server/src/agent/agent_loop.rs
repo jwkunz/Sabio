@@ -813,7 +813,13 @@ async fn execute_step_command(
         plan.title,
         step_id
     );
-    let payload = command_approval_payload(&request);
+    let payload = command_approval_payload(
+        &request,
+        Some(&plan.id),
+        Some(&plan.title),
+        Some(step_id),
+        Some(&step_title_from_plan(plan, step_id)),
+    );
     let approval = match storage::create_approval(&session.id, kind, title, detail, payload) {
         Ok(approval) => approval,
         Err(error) => {
@@ -890,7 +896,7 @@ fn find_matching_command_approval(
     session: &AgentSessionRecord,
     request: &CommandExecutionRequest,
 ) -> Option<AgentApproval> {
-    let payload = command_approval_payload(request);
+    let payload = command_approval_payload(request, None, None, None, None);
     let mut matched = session
         .approvals
         .iter()
@@ -911,6 +917,14 @@ fn find_matching_command_approval(
     });
 
     matched.into_iter().next()
+}
+
+fn step_title_from_plan(plan: &AgentPlan, step_id: &str) -> String {
+    plan.steps
+        .iter()
+        .find(|step| step.id == step_id)
+        .map(|step| step.title.clone())
+        .unwrap_or_else(|| step_id.to_string())
 }
 
 fn ensure_plan_approved(

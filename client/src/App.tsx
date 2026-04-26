@@ -100,6 +100,22 @@ const formatApprovalCommand = (approval: AgentApproval) => {
   return [command, ...args].join(" ") + (cwd ? ` @ ${cwd}` : "");
 };
 
+const formatApprovalContext = (approval: AgentApproval) => {
+  const payload = approval.payload ?? {};
+  const planTitle = readAgentString(payload.planTitle);
+  const stepTitle = readAgentString(payload.stepTitle);
+
+  if (planTitle && stepTitle) {
+    return `${planTitle} -> ${stepTitle}`;
+  }
+
+  if (planTitle) {
+    return planTitle;
+  }
+
+  return stepTitle;
+};
+
 const summarizeAgentEvent = (event: AgentEvent) => {
   const payload = event.payload ?? {};
   const tool = readAgentString(payload.tool);
@@ -2314,6 +2330,9 @@ function App() {
                       </div>
                       <p>{approval.detail}</p>
                       <small>{formatAgentEventType(approval.kind)}</small>
+                      {formatApprovalContext(approval) ? (
+                        <p className="agent-event-detail">{formatApprovalContext(approval)}</p>
+                      ) : null}
                       {formatApprovalCommand(approval) ? (
                         <pre className="agent-event-payload">{formatApprovalCommand(approval)}</pre>
                       ) : null}
