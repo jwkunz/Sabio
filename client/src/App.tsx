@@ -283,6 +283,11 @@ function App() {
   const [agentApprovals, setAgentApprovals] = useState<AgentApproval[]>([]);
   const [agentPlans, setAgentPlans] = useState<AgentPlan[]>([]);
   const [isAgentRunning, setIsAgentRunning] = useState(false);
+  const [isCreatingStarterPlan, setIsCreatingStarterPlan] = useState(false);
+  const [isGeneratingAgentPlan, setIsGeneratingAgentPlan] = useState(false);
+  const [isCancellingAgentRun, setIsCancellingAgentRun] = useState(false);
+  const [isDeletingAgentSession, setIsDeletingAgentSession] = useState(false);
+  const [resolvingApprovalIds, setResolvingApprovalIds] = useState<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ startX: number; widths: PaneWidths; handle: "left" | "right" } | null>(null);
@@ -1254,10 +1259,16 @@ function App() {
   };
 
   const createStarterPlan = async () => {
+    if (isCreatingStarterPlan) {
+      return;
+    }
+
     if (!selectedAgentSessionId) {
       setAgentSessionStatus("Select or trust a session before creating a plan.");
       return;
     }
+
+    setIsCreatingStarterPlan(true);
 
     try {
       const response = await fetch(`/api/agent/sessions/${encodeURIComponent(selectedAgentSessionId)}/plans`, {
@@ -1303,11 +1314,17 @@ function App() {
       setAgentSessionStatus("Plan created and queued for approval.");
     } catch (planError) {
       setAgentSessionStatus((planError as Error).message || "Unable to create plan.");
+    } finally {
+      setIsCreatingStarterPlan(false);
     }
   };
 
   const generateAgentPlan = async () => {
     const task = session.agentTaskDraft.trim();
+
+    if (isGeneratingAgentPlan) {
+      return;
+    }
 
     if (!selectedAgentSessionId) {
       setAgentSessionStatus("Select or trust a session before generating a plan.");
@@ -1325,6 +1342,7 @@ function App() {
     }
 
     setAgentSessionStatus("Generating an agent plan...");
+    setIsGeneratingAgentPlan(true);
 
     try {
       const response = await fetch(
@@ -1360,10 +1378,16 @@ function App() {
       setAgentSessionStatus("Model-generated plan created and queued for approval.");
     } catch (planError) {
       setAgentSessionStatus((planError as Error).message || "Unable to generate plan.");
+    } finally {
+      setIsGeneratingAgentPlan(false);
     }
   };
 
   const runAgentPlan = async () => {
+    if (isAgentRunning || isCancellingAgentRun) {
+      return;
+    }
+
     if (!selectedAgentSessionId) {
       setAgentSessionStatus("Select an agent session before running a plan.");
       return;
@@ -1434,9 +1458,11 @@ function App() {
   };
 
   const cancelAgentRun = async () => {
-    if (!selectedAgentSessionId) {
+    if (!selectedAgentSessionId || isCancellingAgentRun) {
       return;
     }
+
+    setIsCancellingAgentRun(true);
 
     try {
       const response = await fetch(
@@ -1465,13 +1491,17 @@ function App() {
       ]);
     } catch (cancelError) {
       setAgentSessionStatus((cancelError as Error).message || "Unable to cancel agent run.");
+    } finally {
+      setIsCancellingAgentRun(false);
     }
   };
 
   const resolveAgentApproval = async (approvalId: string, approved: boolean) => {
-    if (!selectedAgentSessionId) {
+    if (!selectedAgentSessionId || resolvingApprovalIds.includes(approvalId)) {
       return;
     }
+
+    setResolvingApprovalIds((current) => [...current, approvalId]);
 
     try {
       const response = await fetch(
@@ -1520,6 +1550,8 @@ function App() {
       );
     } catch (approvalError) {
       setAgentSessionStatus((approvalError as Error).message || "Unable to resolve approval.");
+    } finally {
+      setResolvingApprovalIds((current) => current.filter((entry) => entry !== approvalId));
     }
   };
 
@@ -1592,7 +1624,7 @@ function App() {
   };
 
   const deleteAgentSession = async () => {
-    if (!selectedAgentSessionId || !selectedAgentSession) {
+    if (!selectedAgentSessionId || !selectedAgentSession || isDeletingAgentSession) {
       return;
     }
 
@@ -1603,6 +1635,8 @@ function App() {
     ) {
       return;
     }
+
+    setIsDeletingAgentSession(true);
 
     try {
       const response = await fetch(`/api/agent/sessions/${encodeURIComponent(selectedAgentSessionId)}`, {
@@ -1622,6 +1656,8 @@ function App() {
       setAgentSessionStatus(payload?.message || "Agent session deleted.");
     } catch (deleteError) {
       setAgentSessionStatus((deleteError as Error).message || "Unable to delete agent session.");
+    } finally {
+      setIsDeletingAgentSession(false);
     }
   };
 
@@ -2410,27 +2446,47 @@ function App() {
                   type="button"
                   className="secondary-button"
                   onClick={() => void createStarterPlan()}
-                  disabled={!selectedAgentSessionId}
+                  disabled={!selectedAgentSessionId || isCreatingStarterPlan || isGeneratingAgentPlan || isAgentRunning}
                 >
-                  Create starter plan
+                  {isCreatingStarterPlan ? "Creating..." : "Create starter plan"}
                 </button>
                 <button
                   type="button"
                   onClick={() => void generateAgentPlan()}
-                  disabled={!selectedAgentSessionId || !session.selectedModel || !session.agentTaskDraft.trim()}
+                  disabled={
+                    !selectedAgentSessionId ||
+                    !session.selectedModel ||
+                    !session.agentTaskDraft.trim() ||
+                    isGeneratingAgentPlan ||
+                    isCreatingStarterPlan ||
+                    isAgentRunning
+                  }
                 >
-                  Generate plan
+                  {isGeneratingAgentPlan ? "Generating..." : "Generate plan"}
                 </button>
                 <button
                   type="button"
                   onClick={() => void runAgentPlan()}
-                  disabled={!selectedAgentSessionId || !session.selectedModel || !activeRunnablePlan || isAgentRunning}
+                  disabled={
+                    !selectedAgentSessionId ||
+                    !session.selectedModel ||
+                    !activeRunnablePlan ||
+                    isAgentRunning ||
+                    isCancellingAgentRun ||
+                    isGeneratingAgentPlan ||
+                    isCreatingStarterPlan
+                  }
                 >
                   {pendingCommandApprovals.length > 0 ? "Resume agent" : "Run agent"}
                 </button>
                 {isAgentRunning ? (
-                  <button type="button" className="secondary-button" onClick={() => void cancelAgentRun()}>
-                    Cancel run
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => void cancelAgentRun()}
+                    disabled={isCancellingAgentRun}
+                  >
+                    {isCancellingAgentRun ? "Cancelling..." : "Cancel run"}
                   </button>
                 ) : null}
               </div>
@@ -2593,9 +2649,9 @@ function App() {
                       type="button"
                       className="secondary-button danger-button"
                       onClick={() => void deleteAgentSession()}
-                      disabled={isAgentRunning}
+                      disabled={isAgentRunning || isDeletingAgentSession || isCancellingAgentRun}
                     >
-                      Delete session
+                      {isDeletingAgentSession ? "Deleting..." : "Delete session"}
                     </button>
                   </div>
                 </>
@@ -2625,13 +2681,18 @@ function App() {
                       ) : null}
                       {approval.status === "pending" ? (
                         <div className="approval-actions">
-                          <button type="button" onClick={() => void resolveAgentApproval(approval.id, true)}>
+                          <button
+                            type="button"
+                            onClick={() => void resolveAgentApproval(approval.id, true)}
+                            disabled={resolvingApprovalIds.includes(approval.id)}
+                          >
                             Approve
                           </button>
                           <button
                             type="button"
                             className="danger-button"
                             onClick={() => void resolveAgentApproval(approval.id, false)}
+                            disabled={resolvingApprovalIds.includes(approval.id)}
                           >
                             Reject
                           </button>
