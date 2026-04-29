@@ -397,6 +397,7 @@ pub async fn run_approved_plan(
             "planId": plan.id,
             "summary": summary,
             "commitHashes": commit_hashes,
+            "outcome": "completed",
         }),
     )
     .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
@@ -987,6 +988,7 @@ fn ensure_run_not_cancelled(
             "message": "Agent run cancelled by user.",
             "planId": plan_id,
             "stepId": step_id,
+            "outcome": "cancelled",
         }),
     );
 

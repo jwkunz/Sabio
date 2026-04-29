@@ -125,6 +125,11 @@ const findApprovalPlanStep = (approval: AgentApproval) => {
   };
 };
 
+const isPersistedRunOutcome = (value: unknown): value is AgentRunOutcome =>
+  value === "completed" || value === "paused" || value === "cancelled";
+
+const hasRemainingPlanSteps = (plan: AgentPlan) => plan.steps.some((step) => step.status !== "completed");
+
 const summarizeAgentEvent = (event: AgentEvent) => {
   const payload = event.payload ?? {};
   const tool = readAgentString(payload.tool);
@@ -276,7 +281,6 @@ function App() {
   const [agentApprovals, setAgentApprovals] = useState<AgentApproval[]>([]);
   const [agentPlans, setAgentPlans] = useState<AgentPlan[]>([]);
   const [isAgentRunning, setIsAgentRunning] = useState(false);
-  const [lastAgentRunOutcome, setLastAgentRunOutcome] = useState<AgentRunOutcome | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ startX: number; widths: PaneWidths; handle: "left" | "right" } | null>(null);
@@ -306,10 +310,30 @@ function App() {
         (approval) =>
           approval.status === "pending" &&
           (approval.kind === "network_command" || approval.kind === "destructive_command")
-      ),
+      )
+      .sort((left, right) => right.createdAt - left.createdAt),
     [agentApprovals]
   );
-  const activeCommandApproval = useMemo(() => pendingCommandApprovals[0] ?? null, [pendingCommandApprovals]);
+  const activeCommandApproval = useMemo(() => {
+    for (const approval of pendingCommandApprovals) {
+      const target = findApprovalPlanStep(approval);
+
+      if (!target.planId) {
+        continue;
+      }
+
+      const blockedPlan = agentPlans.find((plan) => plan.id === target.planId);
+      const planApproval = blockedPlan
+        ? agentApprovals.find((entry) => entry.id === blockedPlan.approvalId)
+        : null;
+
+      if (blockedPlan && planApproval?.status === "approved" && hasRemainingPlanSteps(blockedPlan)) {
+        return approval;
+      }
+    }
+
+    return pendingCommandApprovals[0] ?? null;
+  }, [agentApprovals, agentPlans, pendingCommandApprovals]);
   const activeApprovalTarget = useMemo(
     () => (activeCommandApproval ? findApprovalPlanStep(activeCommandApproval) : { planId: "", stepId: "" }),
     [activeCommandApproval]
@@ -323,8 +347,7 @@ function App() {
           }
 
           const approval = agentApprovals.find((entry) => entry.id === plan.approvalId);
-          const hasRemainingSteps = plan.steps.some((step) => step.status !== "completed");
-          return approval?.status === "approved" && hasRemainingSteps;
+          return approval?.status === "approved" && hasRemainingPlanSteps(plan);
         }) ?? null
       );
     }
@@ -333,14 +356,36 @@ function App() {
   }, [activeApprovalTarget.planId, agentApprovals, agentPlans]);
   const runnableAgentPlan = useMemo(
     () =>
-      agentPlans.find((plan) => {
-        const approval = agentApprovals.find((entry) => entry.id === plan.approvalId);
-        const hasRemainingSteps = plan.steps.some((step) => step.status !== "completed");
-        return approval?.status === "approved" && hasRemainingSteps;
-      }) ?? null,
+      agentPlans
+        .slice()
+        .sort((left, right) => right.createdAt - left.createdAt)
+        .find((plan) => {
+          const approval = agentApprovals.find((entry) => entry.id === plan.approvalId);
+          return approval?.status === "approved" && hasRemainingPlanSteps(plan);
+        }) ?? null,
     [agentApprovals, agentPlans]
   );
   const activeRunnablePlan = resumableAgentPlan ?? runnableAgentPlan;
+  const persistedAgentRunOutcome = useMemo(() => {
+    if (activeCommandApproval) {
+      return "paused" as AgentRunOutcome;
+    }
+
+    for (let index = agentEvents.length - 1; index >= 0; index -= 1) {
+      const event = agentEvents[index];
+
+      if (event.type === "cancelled") {
+        return "cancelled" as AgentRunOutcome;
+      }
+
+      if (event.type === "session_finished") {
+        const persistedOutcome = event.payload?.outcome;
+        return isPersistedRunOutcome(persistedOutcome) ? persistedOutcome : "completed";
+      }
+    }
+
+    return null;
+  }, [activeCommandApproval, agentEvents]);
   const commandLogEntries = useMemo(
     () =>
       agentEvents
@@ -514,6 +559,7 @@ function App() {
       setAgentEvents([]);
       setAgentApprovals([]);
       setAgentPlans([]);
+      setAgentSessionStatus("");
       setIsAgentRunning(false);
       return;
     }
@@ -1260,10 +1306,8 @@ function App() {
         loadAgentApprovals(selectedAgentSessionId),
         loadAgentEvents(selectedAgentSessionId)
       ]);
-      setLastAgentRunOutcome(payload.outcome ?? null);
       setAgentSessionStatus(payload.summary || "Approved plan run completed.");
     } catch (runError) {
-      setLastAgentRunOutcome(null);
       setAgentSessionStatus((runError as Error).message || "Unable to run agent plan.");
       await Promise.all([
         loadAgentSessions(session.agentWorkspace.canonicalPath),
@@ -1296,7 +1340,6 @@ function App() {
         throw new Error(payload?.error || "Unable to cancel agent run.");
       }
 
-      setLastAgentRunOutcome(payload?.cancelled ? "cancelled" : null);
       setAgentSessionStatus(payload?.message || "Cancellation requested.");
       await Promise.all([
         loadAgentSessions(session.agentWorkspace.canonicalPath),
@@ -2002,7 +2045,7 @@ function App() {
                     ? "Running"
                     : pendingCommandApprovals.length > 0
                       ? "Paused"
-                      : formatRunOutcome(lastAgentRunOutcome)}
+                      : formatRunOutcome(persistedAgentRunOutcome)}
                 </strong>
               </article>
               <article className="agent-status-card">
