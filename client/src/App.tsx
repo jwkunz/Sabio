@@ -129,6 +129,8 @@ const isPersistedRunOutcome = (value: unknown): value is AgentRunOutcome =>
   value === "completed" || value === "paused" || value === "failed" || value === "cancelled";
 
 const hasRemainingPlanSteps = (plan: AgentPlan) => plan.steps.some((step) => step.status !== "completed");
+const countCompletedPlanSteps = (plan: AgentPlan) =>
+  plan.steps.filter((step) => step.status === "completed").length;
 const isMissingSessionResponse = (response: Response) => response.status === 404;
 const hasLineBreak = (value: string) => value.includes("\n");
 
@@ -2234,19 +2236,13 @@ function App() {
                 <span>{error}</span>
               </div>
             ) : null}
-            <article className="agent-event">
-              <div className="message-meta">
-                <span>Session</span>
-                <span>{session.agentWorkspace.trusted ? "Trusted" : "Blocked"}</span>
-              </div>
-              <p>
-                {selectedAgentSession
-                  ? `${selectedAgentSession.title} on ${selectedAgentSession.gitBranch || "current branch"}`
-                  : session.agentWorkspace.trusted
-                    ? "No agent session selected."
-                    : "Trust a clean git workspace before starting an agent run."}
-              </p>
-            </article>
+            <section className="agent-session-strip" aria-label="Current agent session">
+              <span className="agent-session-strip-title">
+                {selectedAgentSession ? selectedAgentSession.title : "No agent session selected"}
+              </span>
+              <span>{selectedAgentSession?.gitBranch || session.agentWorkspace.gitBranch || "current branch"}</span>
+              <span>{session.agentWorkspace.trusted ? "Trusted workspace" : "Workspace blocked"}</span>
+            </section>
             {agentSessionStatus ? (
               <article className="agent-event">
                 <div className="message-meta">
@@ -2310,6 +2306,15 @@ function App() {
                     </div>
                     <h3>{plan.title}</h3>
                     {plan.summary ? <p>{plan.summary}</p> : null}
+                    <div className="agent-plan-progress">
+                      <div className="agent-plan-progress-meta">
+                        <strong>Awaiting approval</strong>
+                        <span>0 / {plan.steps.length} steps complete</span>
+                      </div>
+                      <div className="agent-plan-progress-track" aria-hidden="true">
+                        <span className="agent-plan-progress-fill" style={{ width: "0%" }} />
+                      </div>
+                    </div>
                     <ol>
                       {plan.steps.slice(0, 4).map((step) => (
                         <li key={step.id} className="agent-plan-step">
@@ -2366,6 +2371,20 @@ function App() {
               <section className="agent-plan-stack">
                 {sortedAgentPlans.map((plan) => {
                   const approval = agentApprovals.find((entry) => entry.id === plan.approvalId);
+                  const completedSteps = countCompletedPlanSteps(plan);
+                  const totalSteps = Math.max(plan.steps.length, 1);
+                  const progressPercent = Math.round((completedSteps / totalSteps) * 100);
+                  const activeStep = plan.steps.find((step) => step.status === "in_progress");
+                  const planProgressLabel =
+                    approval?.status === "pending"
+                      ? "Awaiting approval"
+                      : activeStep
+                        ? `Running: ${activeStep.title}`
+                        : completedSteps === totalSteps
+                          ? "Completed"
+                          : approval?.status === "approved"
+                            ? "Ready to run"
+                            : "Waiting";
 
                   return (
                     <article className="agent-plan-card" key={plan.id}>
@@ -2375,6 +2394,20 @@ function App() {
                       </div>
                       <h3>{plan.title}</h3>
                       {plan.summary ? <p>{plan.summary}</p> : null}
+                      <div className="agent-plan-progress">
+                        <div className="agent-plan-progress-meta">
+                          <strong>{planProgressLabel}</strong>
+                          <span>
+                            {completedSteps} / {plan.steps.length} steps complete
+                          </span>
+                        </div>
+                        <div className="agent-plan-progress-track" aria-hidden="true">
+                          <span
+                            className="agent-plan-progress-fill"
+                            style={{ width: `${progressPercent}%` }}
+                          />
+                        </div>
+                      </div>
                       <ol>
                         {plan.steps.map((step) => (
                           <li
