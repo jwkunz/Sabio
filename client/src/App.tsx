@@ -287,6 +287,15 @@ function App() {
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ startX: number; widths: PaneWidths; handle: "left" | "right" } | null>(null);
   const draftBeforeHistoryRef = useRef("");
+  const selectedAgentSessionIdRef = useRef("");
+  const agentWorkspacePathRef = useRef("");
+  const agentLoadRequestIdsRef = useRef({
+    sessions: 0,
+    events: 0,
+    approvals: 0,
+    plans: 0,
+    runStatus: 0
+  });
 
   const selectedFiles = useMemo(
     () => files.filter((file) => file.isSelected).sort((a, b) => a.uploadedAt - b.uploadedAt),
@@ -410,6 +419,14 @@ function App() {
         .slice(0, 5),
     [agentEvents]
   );
+
+  useEffect(() => {
+    selectedAgentSessionIdRef.current = selectedAgentSessionId;
+  }, [selectedAgentSessionId]);
+
+  useEffect(() => {
+    agentWorkspacePathRef.current = session.agentWorkspace.canonicalPath;
+  }, [session.agentWorkspace.canonicalPath]);
 
   const loadModelOptions = async () => {
     setModelStatus("Loading models...");
@@ -1051,6 +1068,7 @@ function App() {
 
   const loadAgentSessions = async (workspacePath?: string) => {
     const query = workspacePath ? `?workspacePath=${encodeURIComponent(workspacePath)}` : "";
+    const requestId = ++agentLoadRequestIdsRef.current.sessions;
 
     try {
       const response = await fetch(`/api/agent/sessions${query}`);
@@ -1061,6 +1079,14 @@ function App() {
       }
 
       const sessions = (await response.json()) as AgentSessionSummary[];
+
+      if (
+        requestId !== agentLoadRequestIdsRef.current.sessions ||
+        (workspacePath ?? "") !== agentWorkspacePathRef.current
+      ) {
+        return;
+      }
+
       setAgentSessions(sessions);
 
       if (sessions.length > 0) {
@@ -1083,7 +1109,7 @@ function App() {
   };
 
   const handleMissingAgentSession = async (sessionId: string) => {
-    if (selectedAgentSessionId !== sessionId) {
+    if (selectedAgentSessionIdRef.current !== sessionId) {
       return;
     }
 
@@ -1112,6 +1138,8 @@ function App() {
   };
 
   const loadAgentEvents = async (sessionId: string) => {
+    const requestId = ++agentLoadRequestIdsRef.current.events;
+
     try {
       const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/events`);
 
@@ -1126,6 +1154,12 @@ function App() {
       }
 
       const payload = (await response.json()) as { events: AgentEvent[] };
+      if (
+        requestId !== agentLoadRequestIdsRef.current.events ||
+        selectedAgentSessionIdRef.current !== sessionId
+      ) {
+        return;
+      }
       setAgentEvents(payload.events);
     } catch (eventError) {
       setAgentSessionStatus((eventError as Error).message || "Unable to load agent events.");
@@ -1133,6 +1167,8 @@ function App() {
   };
 
   const loadAgentApprovals = async (sessionId: string) => {
+    const requestId = ++agentLoadRequestIdsRef.current.approvals;
+
     try {
       const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/approvals`);
 
@@ -1147,6 +1183,12 @@ function App() {
       }
 
       const payload = (await response.json()) as { approvals: AgentApproval[] };
+      if (
+        requestId !== agentLoadRequestIdsRef.current.approvals ||
+        selectedAgentSessionIdRef.current !== sessionId
+      ) {
+        return;
+      }
       setAgentApprovals(payload.approvals);
     } catch (approvalError) {
       setAgentSessionStatus((approvalError as Error).message || "Unable to load approvals.");
@@ -1154,6 +1196,8 @@ function App() {
   };
 
   const loadAgentPlans = async (sessionId: string) => {
+    const requestId = ++agentLoadRequestIdsRef.current.plans;
+
     try {
       const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/plans`);
 
@@ -1168,6 +1212,12 @@ function App() {
       }
 
       const payload = (await response.json()) as { plans: AgentPlan[] };
+      if (
+        requestId !== agentLoadRequestIdsRef.current.plans ||
+        selectedAgentSessionIdRef.current !== sessionId
+      ) {
+        return;
+      }
       setAgentPlans(payload.plans);
     } catch (planError) {
       setAgentSessionStatus((planError as Error).message || "Unable to load plans.");
@@ -1175,6 +1225,8 @@ function App() {
   };
 
   const loadAgentRunStatus = async (sessionId: string) => {
+    const requestId = ++agentLoadRequestIdsRef.current.runStatus;
+
     try {
       const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/run/status`);
 
@@ -1189,6 +1241,12 @@ function App() {
       }
 
       const payload = (await response.json()) as { running?: boolean; cancelled?: boolean };
+      if (
+        requestId !== agentLoadRequestIdsRef.current.runStatus ||
+        selectedAgentSessionIdRef.current !== sessionId
+      ) {
+        return;
+      }
       setIsAgentRunning(Boolean(payload.running));
     } catch (runStatusError) {
       setAgentSessionStatus((runStatusError as Error).message || "Unable to load run status.");
