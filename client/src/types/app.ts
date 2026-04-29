@@ -149,3 +149,16 @@ export interface AgentPlanStep {
   detail: string;
   status: "pending" | "in_progress" | "completed" | "failed" | "cancelled";
 }
+
+export interface GitHistoryEntry {
+  hash: string;
+  shortHash: string;
+  author: string;
+  authoredAt: string;
+  summary: string;
+}
+
+export interface GitBranchEntry {
+  name: string;
+  current: boolean;
+}

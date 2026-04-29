@@ -21,8 +21,9 @@ use crate::AppState;
 use super::agent_loop::run_approved_plan;
 use super::storage;
 use super::tools::{
-    execute_command, execute_git_commit, execute_read_only_tool, execute_write_tool,
-    preview_command, tool_specs, validate_tool_call, AgentToolName, CommandClassification,
+    checkout_git_branch, create_git_branch, execute_command, execute_git_commit,
+    execute_read_only_tool, execute_write_tool, preview_command, read_git_branches,
+    read_git_history, tool_specs, validate_tool_call, AgentToolName, CommandClassification,
     CommandExecutionRequest, GitCommitRequest, ToolCallValidationRequest, ToolExecutionRequest,
     command_approval_payload,
 };
@@ -30,7 +31,8 @@ use super::types::{
     AgentApiError, AgentApprovalKind, AgentApprovalsResponse, AgentCapability, AgentEventsResponse,
     AgentHealthResponse, AgentPlansResponse, AgentRouteStatus, AgentSessionRecord,
     AgentSessionSummary, AgentWorkspaceStatus, CreatePlanRequest, CreateSessionRequest,
-    DeleteSessionResponse, ExecuteWriteToolRequest, GeneratePlanRequest, InitializeGitRequest,
+    DeleteSessionResponse, ExecuteWriteToolRequest, GeneratePlanRequest, GitBranchMutationResponse,
+    GitCheckoutBranchRequest, GitCreateBranchRequest, GitHistoryResponse, InitializeGitRequest,
     ListSessionsQuery, RenameSessionRequest, ResolveApprovalRequest, RunPlanRequest,
     ValidateWorkspaceRequest, ValidateWorkspaceResponse,
 };
@@ -68,6 +70,9 @@ pub fn router() -> Router<AppState> {
             post(execute_write_tool_route),
         )
         .route("/sessions/:session_id/git/commit", post(git_commit))
+        .route("/sessions/:session_id/git/history", get(git_history))
+        .route("/sessions/:session_id/git/checkout-branch", post(checkout_branch))
+        .route("/sessions/:session_id/git/create-branch", post(create_branch))
         .route(
             "/sessions/:session_id/approvals/command",
             post(request_command_approval),
@@ -176,6 +181,108 @@ async fn git_commit(
     }
 
     Ok(Json(response))
+}
+
+async fn git_history(
+    AxumPath(session_id): AxumPath<String>,
+) -> Result<Json<GitHistoryResponse>, (StatusCode, Json<AgentApiError>)> {
+    let session = storage::get_session(&session_id)
+        .map_err(|error| agent_error(StatusCode::NOT_FOUND, error))?;
+    let (current_branch, branches) = read_git_branches(&session.workspace_path)
+        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
+    let entries = read_git_history(&session.workspace_path, 10)
+        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
+
+    Ok(Json(GitHistoryResponse {
+        current_branch,
+        branches: branches
+            .into_iter()
+            .map(|entry| super::types::GitBranchEntry {
+                name: entry.name,
+                current: entry.current,
+            })
+            .collect(),
+        entries: entries
+            .into_iter()
+            .map(|entry| super::types::GitHistoryEntry {
+                hash: entry.hash,
+                short_hash: entry.short_hash,
+                author: entry.author,
+                authored_at: entry.authored_at,
+                summary: entry.summary,
+            })
+            .collect(),
+    }))
+}
+
+async fn checkout_branch(
+    State(state): State<AppState>,
+    AxumPath(session_id): AxumPath<String>,
+    Json(request): Json<GitCheckoutBranchRequest>,
+) -> Result<Json<GitBranchMutationResponse>, (StatusCode, Json<AgentApiError>)> {
+    if state.agent_runs.status(&session_id).running {
+        return Err(agent_error(
+            StatusCode::CONFLICT,
+            "Cancel the active agent run before switching branches.",
+        ));
+    }
+
+    let session = storage::get_session(&session_id)
+        .map_err(|error| agent_error(StatusCode::NOT_FOUND, error))?;
+    let workspace = inspect_workspace(&session.workspace_path)?;
+
+    if workspace.clean_worktree != Some(true) {
+        return Err(agent_error(
+            StatusCode::CONFLICT,
+            "Workspace must be clean before switching branches.",
+        ));
+    }
+
+    let current_branch = checkout_git_branch(&session.workspace_path, &request.branch_name)
+        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
+    storage::update_session_git_branch(&session_id, Some(current_branch.clone()))
+        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
+
+    Ok(Json(GitBranchMutationResponse {
+        ok: true,
+        current_branch,
+        message: "Branch switched.".to_string(),
+    }))
+}
+
+async fn create_branch(
+    State(state): State<AppState>,
+    AxumPath(session_id): AxumPath<String>,
+    Json(request): Json<GitCreateBranchRequest>,
+) -> Result<Json<GitBranchMutationResponse>, (StatusCode, Json<AgentApiError>)> {
+    if state.agent_runs.status(&session_id).running {
+        return Err(agent_error(
+            StatusCode::CONFLICT,
+            "Cancel the active agent run before creating a branch.",
+        ));
+    }
+
+    let session = storage::get_session(&session_id)
+        .map_err(|error| agent_error(StatusCode::NOT_FOUND, error))?;
+    let workspace = inspect_workspace(&session.workspace_path)?;
+
+    if workspace.clean_worktree != Some(true) {
+        return Err(agent_error(
+            StatusCode::CONFLICT,
+            "Workspace must be clean before creating a branch.",
+        ));
+    }
+
+    let current_branch = create_git_branch(&session.workspace_path, &request.branch_name)
+        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
+    storage::update_session_git_branch(&session_id, Some(current_branch.clone()))
+        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
+
+    Ok(Json(GitBranchMutationResponse {
+        ok: true,
+        current_branch,
+        message: "Branch created and checked out.".to_string(),
+    }))
 }
 
 async fn sessions(

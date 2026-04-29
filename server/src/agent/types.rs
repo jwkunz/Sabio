@@ -246,6 +246,51 @@ pub struct AgentPlansResponse {
     pub plans: Vec<AgentPlan>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHistoryEntry {
+    pub hash: String,
+    pub short_hash: String,
+    pub author: String,
+    pub authored_at: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHistoryResponse {
+    pub current_branch: String,
+    pub branches: Vec<GitBranchEntry>,
+    pub entries: Vec<GitHistoryEntry>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchEntry {
+    pub name: String,
+    pub current: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCheckoutBranchRequest {
+    pub branch_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCreateBranchRequest {
+    pub branch_name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchMutationResponse {
+    pub ok: bool,
+    pub current_branch: String,
+    pub message: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreatePlanRequest {

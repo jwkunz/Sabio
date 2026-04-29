@@ -36,6 +36,8 @@ import type {
   AgentToolSpec,
   DisplayFontSize,
   DisplayTheme,
+  GitBranchEntry,
+  GitHistoryEntry,
   Message,
   ModelOption,
   PaneWidths,
@@ -133,6 +135,37 @@ const countCompletedPlanSteps = (plan: AgentPlan) =>
   plan.steps.filter((step) => step.status === "completed").length;
 const isMissingSessionResponse = (response: Response) => response.status === 404;
 const hasLineBreak = (value: string) => value.includes("\n");
+const sanitizeBranchName = (value: string) => value.trim().replace(/\s+/g, "-");
+const formatRelativeTime = (value: string) => {
+  const timestamp = Date.parse(value);
+
+  if (Number.isNaN(timestamp)) {
+    return value;
+  }
+
+  const deltaMs = Date.now() - timestamp;
+  const deltaMinutes = Math.max(0, Math.round(deltaMs / 60000));
+
+  if (deltaMinutes < 1) {
+    return "just now";
+  }
+
+  if (deltaMinutes < 60) {
+    return `${deltaMinutes}m ago`;
+  }
+
+  const deltaHours = Math.round(deltaMinutes / 60);
+  if (deltaHours < 24) {
+    return `${deltaHours}h ago`;
+  }
+
+  const deltaDays = Math.round(deltaHours / 24);
+  if (deltaDays < 7) {
+    return `${deltaDays}d ago`;
+  }
+
+  return new Date(timestamp).toLocaleDateString();
+};
 
 const summarizeAgentEvent = (event: AgentEvent) => {
   const payload = event.payload ?? {};
@@ -284,11 +317,17 @@ function App() {
   const [agentTools, setAgentTools] = useState<AgentToolSpec[]>([]);
   const [agentApprovals, setAgentApprovals] = useState<AgentApproval[]>([]);
   const [agentPlans, setAgentPlans] = useState<AgentPlan[]>([]);
+  const [agentGitHistory, setAgentGitHistory] = useState<GitHistoryEntry[]>([]);
+  const [agentBranches, setAgentBranches] = useState<GitBranchEntry[]>([]);
+  const [agentCurrentBranch, setAgentCurrentBranch] = useState("");
+  const [newBranchName, setNewBranchName] = useState("");
   const [isAgentRunning, setIsAgentRunning] = useState(false);
   const [isCreatingStarterPlan, setIsCreatingStarterPlan] = useState(false);
   const [isGeneratingAgentPlan, setIsGeneratingAgentPlan] = useState(false);
   const [isCancellingAgentRun, setIsCancellingAgentRun] = useState(false);
   const [isDeletingAgentSession, setIsDeletingAgentSession] = useState(false);
+  const [isSwitchingBranch, setIsSwitchingBranch] = useState(false);
+  const [isCreatingBranch, setIsCreatingBranch] = useState(false);
   const [resolvingApprovalIds, setResolvingApprovalIds] = useState<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
@@ -301,7 +340,8 @@ function App() {
     events: 0,
     approvals: 0,
     plans: 0,
-    runStatus: 0
+    runStatus: 0,
+    gitHistory: 0
   });
 
   const selectedFiles = useMemo(
@@ -460,6 +500,13 @@ function App() {
         .reverse()
         .slice(0, 5),
     [agentEvents]
+  );
+  const branchChoices = useMemo(
+    () =>
+      agentBranches
+        .slice()
+        .sort((left, right) => Number(right.current) - Number(left.current) || left.name.localeCompare(right.name)),
+    [agentBranches]
   );
 
   useEffect(() => {
@@ -620,6 +667,9 @@ function App() {
       setAgentEvents([]);
       setAgentApprovals([]);
       setAgentPlans([]);
+      setAgentGitHistory([]);
+      setAgentBranches([]);
+      setAgentCurrentBranch("");
       setAgentSessionStatus("");
       setIsAgentRunning(false);
       return;
@@ -629,6 +679,7 @@ function App() {
     void loadAgentApprovals(selectedAgentSessionId);
     void loadAgentPlans(selectedAgentSessionId);
     void loadAgentRunStatus(selectedAgentSessionId);
+    void loadAgentGitHistory(selectedAgentSessionId);
   }, [selectedAgentSessionId]);
 
   useEffect(() => {
@@ -642,6 +693,7 @@ function App() {
       if (isAgentRunning) {
         void loadAgentEvents(selectedAgentSessionId);
         void loadAgentPlans(selectedAgentSessionId);
+        void loadAgentGitHistory(selectedAgentSessionId);
       }
     }, 1200);
 
@@ -1142,6 +1194,9 @@ function App() {
         setAgentEvents([]);
         setAgentApprovals([]);
         setAgentPlans([]);
+        setAgentGitHistory([]);
+        setAgentBranches([]);
+        setAgentCurrentBranch("");
         setAgentSessionStatus("");
         setIsAgentRunning(false);
       }
@@ -1159,6 +1214,9 @@ function App() {
     setAgentEvents([]);
     setAgentApprovals([]);
     setAgentPlans([]);
+    setAgentGitHistory([]);
+    setAgentBranches([]);
+    setAgentCurrentBranch("");
     setIsAgentRunning(false);
     await loadAgentSessions(session.agentWorkspace.canonicalPath);
     setAgentSessionStatus("This agent session is no longer available. Select another session or create a new one.");
@@ -1295,6 +1353,64 @@ function App() {
     }
   };
 
+  const syncAgentBranchState = (branchName: string, sessionId = selectedAgentSessionIdRef.current) => {
+    setAgentCurrentBranch(branchName);
+    setAgentSessions((current) =>
+      current.map((agentSession) =>
+        agentSession.id === sessionId
+          ? { ...agentSession, gitBranch: branchName }
+          : agentSession
+      )
+    );
+    setSession((current) => ({
+      ...current,
+      agentWorkspace: {
+        ...current.agentWorkspace,
+        gitBranch: branchName
+      }
+    }));
+  };
+
+  const loadAgentGitHistory = async (sessionId: string) => {
+    const requestId = ++agentLoadRequestIdsRef.current.gitHistory;
+
+    try {
+      const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/git/history`);
+
+      if (isMissingSessionResponse(response)) {
+        await handleMissingAgentSession(sessionId);
+        return;
+      }
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Unable to load repository summary.");
+      }
+
+      const payload = (await response.json()) as {
+        currentBranch: string;
+        branches: GitBranchEntry[];
+        entries: GitHistoryEntry[];
+      };
+
+      if (
+        requestId !== agentLoadRequestIdsRef.current.gitHistory ||
+        selectedAgentSessionIdRef.current !== sessionId
+      ) {
+        return;
+      }
+
+      setAgentBranches(payload.branches);
+      setAgentGitHistory(payload.entries);
+      setAgentCurrentBranch(payload.currentBranch || "");
+      if (payload.currentBranch) {
+        syncAgentBranchState(payload.currentBranch, sessionId);
+      }
+    } catch (gitError) {
+      setAgentSessionStatus((gitError as Error).message || "Unable to load repository summary.");
+    }
+  };
+
   const createStarterPlan = async () => {
     if (isCreatingStarterPlan) {
       return;
@@ -1346,7 +1462,8 @@ function App() {
       await Promise.all([
         loadAgentPlans(selectedAgentSessionId),
         loadAgentApprovals(selectedAgentSessionId),
-        loadAgentEvents(selectedAgentSessionId)
+        loadAgentEvents(selectedAgentSessionId),
+        loadAgentGitHistory(selectedAgentSessionId)
       ]);
       setAgentSessionStatus("Plan created and queued for approval.");
     } catch (planError) {
@@ -1410,7 +1527,8 @@ function App() {
       await Promise.all([
         loadAgentPlans(selectedAgentSessionId),
         loadAgentApprovals(selectedAgentSessionId),
-        loadAgentEvents(selectedAgentSessionId)
+        loadAgentEvents(selectedAgentSessionId),
+        loadAgentGitHistory(selectedAgentSessionId)
       ]);
       setAgentSessionStatus("Model-generated plan created and queued for approval.");
     } catch (planError) {
@@ -1478,7 +1596,8 @@ function App() {
         loadAgentSessions(session.agentWorkspace.canonicalPath),
         loadAgentPlans(selectedAgentSessionId),
         loadAgentApprovals(selectedAgentSessionId),
-        loadAgentEvents(selectedAgentSessionId)
+        loadAgentEvents(selectedAgentSessionId),
+        loadAgentGitHistory(selectedAgentSessionId)
       ]);
       setAgentSessionStatus(payload.summary || "Approved plan run completed.");
     } catch (runError) {
@@ -1487,7 +1606,8 @@ function App() {
         loadAgentSessions(session.agentWorkspace.canonicalPath),
         loadAgentPlans(selectedAgentSessionId),
         loadAgentApprovals(selectedAgentSessionId),
-        loadAgentEvents(selectedAgentSessionId)
+        loadAgentEvents(selectedAgentSessionId),
+        loadAgentGitHistory(selectedAgentSessionId)
       ]);
     } finally {
       setIsAgentRunning(false);
@@ -1524,7 +1644,8 @@ function App() {
       setAgentSessionStatus(payload?.message || "Cancellation requested.");
       await Promise.all([
         loadAgentSessions(session.agentWorkspace.canonicalPath),
-        loadAgentEvents(selectedAgentSessionId)
+        loadAgentEvents(selectedAgentSessionId),
+        loadAgentGitHistory(selectedAgentSessionId)
       ]);
     } catch (cancelError) {
       setAgentSessionStatus((cancelError as Error).message || "Unable to cancel agent run.");
@@ -1567,7 +1688,8 @@ function App() {
       await Promise.all([
         loadAgentApprovals(selectedAgentSessionId),
         loadAgentPlans(selectedAgentSessionId),
-        loadAgentEvents(selectedAgentSessionId)
+        loadAgentEvents(selectedAgentSessionId),
+        loadAgentGitHistory(selectedAgentSessionId)
       ]);
       const approval = agentApprovals.find((entry) => entry.id === approvalId);
       const isCommandApproval =
@@ -1688,6 +1810,9 @@ function App() {
       setAgentEvents([]);
       setAgentApprovals([]);
       setAgentPlans([]);
+      setAgentGitHistory([]);
+      setAgentBranches([]);
+      setAgentCurrentBranch("");
       setIsAgentRunning(false);
       await loadAgentSessions(session.agentWorkspace.canonicalPath);
       setAgentSessionStatus(payload?.message || "Agent session deleted.");
@@ -1707,6 +1832,115 @@ function App() {
         trusted: false
       }
     }));
+  };
+
+  const checkoutAgentBranch = async (branchName: string) => {
+    const nextBranch = branchName.trim();
+
+    if (
+      !selectedAgentSessionId ||
+      !nextBranch ||
+      nextBranch === agentCurrentBranch ||
+      isSwitchingBranch ||
+      isCreatingBranch
+    ) {
+      return;
+    }
+
+    setIsSwitchingBranch(true);
+
+    try {
+      const response = await fetch(
+        `/api/agent/sessions/${encodeURIComponent(selectedAgentSessionId)}/git/checkout-branch`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ branchName: nextBranch })
+        }
+      );
+
+      if (isMissingSessionResponse(response)) {
+        await handleMissingAgentSession(selectedAgentSessionId);
+        return;
+      }
+
+      const payload = (await response.json().catch(() => null)) as
+        | { currentBranch?: string; message?: string; error?: string }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.error || "Unable to switch branches.");
+      }
+
+      const currentBranch = payload?.currentBranch || nextBranch;
+      syncAgentBranchState(currentBranch, selectedAgentSessionId);
+      await Promise.all([
+        loadAgentSessions(session.agentWorkspace.canonicalPath),
+        loadAgentGitHistory(selectedAgentSessionId),
+        loadAgentPlans(selectedAgentSessionId),
+        loadAgentApprovals(selectedAgentSessionId),
+        loadAgentEvents(selectedAgentSessionId)
+      ]);
+      setAgentSessionStatus(payload?.message || `Switched to ${currentBranch}.`);
+    } catch (branchError) {
+      setAgentSessionStatus((branchError as Error).message || "Unable to switch branches.");
+    } finally {
+      setIsSwitchingBranch(false);
+    }
+  };
+
+  const createAgentBranch = async () => {
+    const branchName = sanitizeBranchName(newBranchName);
+
+    if (!selectedAgentSessionId || !branchName || isCreatingBranch || isSwitchingBranch) {
+      return;
+    }
+
+    setIsCreatingBranch(true);
+
+    try {
+      const response = await fetch(
+        `/api/agent/sessions/${encodeURIComponent(selectedAgentSessionId)}/git/create-branch`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ branchName })
+        }
+      );
+
+      if (isMissingSessionResponse(response)) {
+        await handleMissingAgentSession(selectedAgentSessionId);
+        return;
+      }
+
+      const payload = (await response.json().catch(() => null)) as
+        | { currentBranch?: string; message?: string; error?: string }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.error || "Unable to create branch.");
+      }
+
+      const currentBranch = payload?.currentBranch || branchName;
+      syncAgentBranchState(currentBranch, selectedAgentSessionId);
+      setNewBranchName("");
+      await Promise.all([
+        loadAgentSessions(session.agentWorkspace.canonicalPath),
+        loadAgentGitHistory(selectedAgentSessionId),
+        loadAgentPlans(selectedAgentSessionId),
+        loadAgentApprovals(selectedAgentSessionId),
+        loadAgentEvents(selectedAgentSessionId)
+      ]);
+      setAgentSessionStatus(payload?.message || `Created ${currentBranch}.`);
+    } catch (branchError) {
+      setAgentSessionStatus((branchError as Error).message || "Unable to create branch.");
+    } finally {
+      setIsCreatingBranch(false);
+    }
   };
 
   const validateWorkspace = async () => {
@@ -2773,6 +3007,91 @@ function App() {
                 </>
               ) : (
                 <p className="empty-state">Trust a workspace to create a session.</p>
+              )}
+            </section>
+            <section className="settings-card">
+              <h3>Repository</h3>
+              {!selectedAgentSession ? (
+                <p className="empty-state">Select a session to inspect repository history.</p>
+              ) : (
+                <>
+                  <section className="repo-summary-card">
+                    <div className="repo-summary-header">
+                      <div>
+                        <span className="repo-summary-label">Current branch</span>
+                        <strong>{agentCurrentBranch || selectedAgentSession.gitBranch || "Unavailable"}</strong>
+                      </div>
+                      <span className="repo-summary-count">
+                        {agentGitHistory.length} recent commit{agentGitHistory.length === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    <label className="field compact-field">
+                      <span>Switch branch</span>
+                      <select
+                        value={agentCurrentBranch || selectedAgentSession.gitBranch || ""}
+                        onChange={(event) => void checkoutAgentBranch(event.target.value)}
+                        disabled={!selectedAgentSession || isAgentRunning || isSwitchingBranch || isCreatingBranch}
+                      >
+                        <option value="">Select branch</option>
+                        {branchChoices.map((branch) => (
+                          <option key={branch.name} value={branch.name}>
+                            {branch.current ? `${branch.name} (current)` : branch.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="branch-create-row">
+                      <label className="field compact-field">
+                        <span>New branch</span>
+                        <input
+                          value={newBranchName}
+                          onChange={(event) => setNewBranchName(event.target.value)}
+                          onBlur={() => setNewBranchName((current) => sanitizeBranchName(current))}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              void createAgentBranch();
+                            }
+                          }}
+                          placeholder="feature/next-step"
+                          disabled={!selectedAgentSession || isAgentRunning || isSwitchingBranch || isCreatingBranch}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => void createAgentBranch()}
+                        disabled={
+                          !selectedAgentSession ||
+                          !sanitizeBranchName(newBranchName) ||
+                          isAgentRunning ||
+                          isSwitchingBranch ||
+                          isCreatingBranch
+                        }
+                      >
+                        {isCreatingBranch ? "Creating..." : "Create"}
+                      </button>
+                    </div>
+                  </section>
+                  {agentGitHistory.length === 0 ? (
+                    <p className="empty-state">No git history available for this repository yet.</p>
+                  ) : (
+                    <div className="approval-list">
+                      {agentGitHistory.map((entry) => (
+                        <article className="approval-card repo-history-card" key={entry.hash}>
+                          <div className="approval-card-header">
+                            <strong>{entry.summary}</strong>
+                            <span>{entry.shortHash}</span>
+                          </div>
+                          <p>{entry.author}</p>
+                          <small title={new Date(entry.authoredAt).toLocaleString()}>
+                            {formatRelativeTime(entry.authoredAt)}
+                          </small>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </section>
             <section className="settings-card">

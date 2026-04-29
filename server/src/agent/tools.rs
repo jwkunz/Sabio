@@ -96,6 +96,23 @@ pub struct GitCommitResponse {
     pub errors: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHistoryEntry {
+    pub hash: String,
+    pub short_hash: String,
+    pub author: String,
+    pub authored_at: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchEntry {
+    pub name: String,
+    pub current: bool,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandClassification {
@@ -375,6 +392,109 @@ pub fn execute_git_commit(workspace_path: &str, request: GitCommitRequest) -> Gi
     };
 
     git_commit_response(Some(hash), commit.stdout, commit.stderr, Vec::new())
+}
+
+pub fn read_git_history(workspace_path: &str, limit: usize) -> Result<Vec<GitHistoryEntry>, String> {
+    let workspace_root = canonical_workspace_root(workspace_path)?;
+    let count = limit.clamp(1, 20).to_string();
+    let output = execute_git_raw(
+        &workspace_root,
+        &[
+            "log",
+            "--date=iso-strict",
+            "--pretty=format:%H%x1f%h%x1f%an%x1f%ad%x1f%s",
+            "-n",
+            &count,
+        ],
+    )
+    .map_err(|error| error.errors.join(" ").trim().to_string())?;
+
+    Ok(output
+        .stdout
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split('\u{1f}');
+            let hash = parts.next()?.trim();
+            let short_hash = parts.next()?.trim();
+            let author = parts.next()?.trim();
+            let authored_at = parts.next()?.trim();
+            let summary = parts.next()?.trim();
+
+            if hash.is_empty() || short_hash.is_empty() || summary.is_empty() {
+                return None;
+            }
+
+            Some(GitHistoryEntry {
+                hash: hash.to_string(),
+                short_hash: short_hash.to_string(),
+                author: author.to_string(),
+                authored_at: authored_at.to_string(),
+                summary: summary.to_string(),
+            })
+        })
+        .collect())
+}
+
+pub fn read_git_branches(workspace_path: &str) -> Result<(String, Vec<GitBranchEntry>), String> {
+    let workspace_root = canonical_workspace_root(workspace_path)?;
+    let output = execute_git_raw(
+        &workspace_root,
+        &["branch", "--format=%(refname:short)%x1f%(HEAD)"],
+    )
+    .map_err(|error| error.errors.join(" ").trim().to_string())?;
+
+    let branches = output
+        .stdout
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split('\u{1f}');
+            let name = parts.next()?.trim();
+            let head = parts.next().unwrap_or_default().trim();
+
+            if name.is_empty() {
+                return None;
+            }
+
+            Some(GitBranchEntry {
+                name: name.to_string(),
+                current: head == "*",
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let current_branch = branches
+        .iter()
+        .find(|entry| entry.current)
+        .map(|entry| entry.name.clone())
+        .unwrap_or_default();
+
+    Ok((current_branch, branches))
+}
+
+pub fn checkout_git_branch(workspace_path: &str, branch_name: &str) -> Result<String, String> {
+    let workspace_root = canonical_workspace_root(workspace_path)?;
+    let branch_name = branch_name.trim();
+
+    if branch_name.is_empty() {
+        return Err("Branch name is required.".to_string());
+    }
+
+    execute_git_raw(&workspace_root, &["checkout", branch_name])
+        .map(|_| branch_name.to_string())
+        .map_err(|error| error.errors.join(" ").trim().to_string())
+}
+
+pub fn create_git_branch(workspace_path: &str, branch_name: &str) -> Result<String, String> {
+    let workspace_root = canonical_workspace_root(workspace_path)?;
+    let branch_name = branch_name.trim();
+
+    if branch_name.is_empty() {
+        return Err("Branch name is required.".to_string());
+    }
+
+    execute_git_raw(&workspace_root, &["checkout", "-b", branch_name])
+        .map(|_| branch_name.to_string())
+        .map_err(|error| error.errors.join(" ").trim().to_string())
 }
 
 pub async fn execute_command(request: CommandExecutionRequest) -> CommandExecutionResponse {

@@ -115,6 +115,17 @@ pub fn rename_session(id: &str, title: String) -> Result<AgentSessionRecord, Str
     Ok(session)
 }
 
+pub fn update_session_git_branch(
+    id: &str,
+    git_branch: Option<String>,
+) -> Result<AgentSessionRecord, String> {
+    let mut session = get_session(id)?;
+    session.git_branch = git_branch;
+    session.updated_at = Utc::now().timestamp_millis();
+    write_session(&session)?;
+    Ok(session)
+}
+
 pub fn delete_session(id: &str) -> Result<(), String> {
     let path = session_path(id)?;
 
