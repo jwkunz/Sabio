@@ -1354,21 +1354,27 @@ function App() {
   };
 
   const syncAgentBranchState = (branchName: string, sessionId = selectedAgentSessionIdRef.current) => {
-    setAgentCurrentBranch(branchName);
+    setAgentCurrentBranch((current) => (current === branchName ? current : branchName));
     setAgentSessions((current) =>
-      current.map((agentSession) =>
-        agentSession.id === sessionId
-          ? { ...agentSession, gitBranch: branchName }
-          : agentSession
-      )
+      current.map((agentSession) => {
+        if (agentSession.id !== sessionId || agentSession.gitBranch === branchName) {
+          return agentSession;
+        }
+
+        return { ...agentSession, gitBranch: branchName };
+      })
     );
-    setSession((current) => ({
-      ...current,
-      agentWorkspace: {
-        ...current.agentWorkspace,
-        gitBranch: branchName
-      }
-    }));
+    setSession((current) =>
+      current.agentWorkspace.gitBranch === branchName
+        ? current
+        : {
+            ...current,
+            agentWorkspace: {
+              ...current.agentWorkspace,
+              gitBranch: branchName
+            }
+          }
+    );
   };
 
   const loadAgentGitHistory = async (sessionId: string) => {
@@ -1400,11 +1406,16 @@ function App() {
         return;
       }
 
-      setAgentBranches(payload.branches);
-      setAgentGitHistory(payload.entries);
-      setAgentCurrentBranch(payload.currentBranch || "");
+      setAgentBranches((current) =>
+        JSON.stringify(current) === JSON.stringify(payload.branches) ? current : payload.branches
+      );
+      setAgentGitHistory((current) =>
+        JSON.stringify(current) === JSON.stringify(payload.entries) ? current : payload.entries
+      );
       if (payload.currentBranch) {
         syncAgentBranchState(payload.currentBranch, sessionId);
+      } else {
+        setAgentCurrentBranch("");
       }
     } catch (gitError) {
       setAgentSessionStatus((gitError as Error).message || "Unable to load repository summary.");
