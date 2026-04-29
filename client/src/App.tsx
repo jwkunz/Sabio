@@ -693,7 +693,6 @@ function App() {
       if (isAgentRunning) {
         void loadAgentEvents(selectedAgentSessionId);
         void loadAgentPlans(selectedAgentSessionId);
-        void loadAgentGitHistory(selectedAgentSessionId);
       }
     }, 1200);
 
@@ -1353,7 +1352,11 @@ function App() {
     }
   };
 
-  const syncAgentBranchState = (branchName: string, sessionId = selectedAgentSessionIdRef.current) => {
+  const syncAgentBranchState = (
+    branchName: string,
+    sessionId = selectedAgentSessionIdRef.current,
+    options?: { syncWorkspace?: boolean }
+  ) => {
     setAgentCurrentBranch((current) => (current === branchName ? current : branchName));
     setAgentSessions((current) =>
       current.map((agentSession) => {
@@ -1364,17 +1367,19 @@ function App() {
         return { ...agentSession, gitBranch: branchName };
       })
     );
-    setSession((current) =>
-      current.agentWorkspace.gitBranch === branchName
-        ? current
-        : {
-            ...current,
-            agentWorkspace: {
-              ...current.agentWorkspace,
-              gitBranch: branchName
+    if (options?.syncWorkspace) {
+      setSession((current) =>
+        current.agentWorkspace.gitBranch === branchName
+          ? current
+          : {
+              ...current,
+              agentWorkspace: {
+                ...current.agentWorkspace,
+                gitBranch: branchName
+              }
             }
-          }
-    );
+      );
+    }
   };
 
   const loadAgentGitHistory = async (sessionId: string) => {
@@ -1473,8 +1478,7 @@ function App() {
       await Promise.all([
         loadAgentPlans(selectedAgentSessionId),
         loadAgentApprovals(selectedAgentSessionId),
-        loadAgentEvents(selectedAgentSessionId),
-        loadAgentGitHistory(selectedAgentSessionId)
+        loadAgentEvents(selectedAgentSessionId)
       ]);
       setAgentSessionStatus("Plan created and queued for approval.");
     } catch (planError) {
@@ -1538,8 +1542,7 @@ function App() {
       await Promise.all([
         loadAgentPlans(selectedAgentSessionId),
         loadAgentApprovals(selectedAgentSessionId),
-        loadAgentEvents(selectedAgentSessionId),
-        loadAgentGitHistory(selectedAgentSessionId)
+        loadAgentEvents(selectedAgentSessionId)
       ]);
       setAgentSessionStatus("Model-generated plan created and queued for approval.");
     } catch (planError) {
@@ -1607,8 +1610,7 @@ function App() {
         loadAgentSessions(session.agentWorkspace.canonicalPath),
         loadAgentPlans(selectedAgentSessionId),
         loadAgentApprovals(selectedAgentSessionId),
-        loadAgentEvents(selectedAgentSessionId),
-        loadAgentGitHistory(selectedAgentSessionId)
+        loadAgentEvents(selectedAgentSessionId)
       ]);
       setAgentSessionStatus(payload.summary || "Approved plan run completed.");
     } catch (runError) {
@@ -1617,8 +1619,7 @@ function App() {
         loadAgentSessions(session.agentWorkspace.canonicalPath),
         loadAgentPlans(selectedAgentSessionId),
         loadAgentApprovals(selectedAgentSessionId),
-        loadAgentEvents(selectedAgentSessionId),
-        loadAgentGitHistory(selectedAgentSessionId)
+        loadAgentEvents(selectedAgentSessionId)
       ]);
     } finally {
       setIsAgentRunning(false);
@@ -1655,8 +1656,7 @@ function App() {
       setAgentSessionStatus(payload?.message || "Cancellation requested.");
       await Promise.all([
         loadAgentSessions(session.agentWorkspace.canonicalPath),
-        loadAgentEvents(selectedAgentSessionId),
-        loadAgentGitHistory(selectedAgentSessionId)
+        loadAgentEvents(selectedAgentSessionId)
       ]);
     } catch (cancelError) {
       setAgentSessionStatus((cancelError as Error).message || "Unable to cancel agent run.");
@@ -1699,8 +1699,7 @@ function App() {
       await Promise.all([
         loadAgentApprovals(selectedAgentSessionId),
         loadAgentPlans(selectedAgentSessionId),
-        loadAgentEvents(selectedAgentSessionId),
-        loadAgentGitHistory(selectedAgentSessionId)
+        loadAgentEvents(selectedAgentSessionId)
       ]);
       const approval = agentApprovals.find((entry) => entry.id === approvalId);
       const isCommandApproval =
@@ -1886,7 +1885,7 @@ function App() {
       }
 
       const currentBranch = payload?.currentBranch || nextBranch;
-      syncAgentBranchState(currentBranch, selectedAgentSessionId);
+      syncAgentBranchState(currentBranch, selectedAgentSessionId, { syncWorkspace: true });
       await Promise.all([
         loadAgentSessions(session.agentWorkspace.canonicalPath),
         loadAgentGitHistory(selectedAgentSessionId),
@@ -1937,7 +1936,7 @@ function App() {
       }
 
       const currentBranch = payload?.currentBranch || branchName;
-      syncAgentBranchState(currentBranch, selectedAgentSessionId);
+      syncAgentBranchState(currentBranch, selectedAgentSessionId, { syncWorkspace: true });
       setNewBranchName("");
       await Promise.all([
         loadAgentSessions(session.agentWorkspace.canonicalPath),

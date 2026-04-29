@@ -150,7 +150,6 @@ button:disabled {
   height: 100vh;
   min-width: 0;
   min-height: 0;
-  backdrop-filter: blur(22px);
 }
 
 .pane-left {
@@ -1105,18 +1104,15 @@ button:disabled {
 }
 
 .agent-composer {
-  position: sticky;
-  bottom: 0;
-  z-index: 3;
-  background:
-    linear-gradient(180deg, rgba(19, 23, 32, 0.86), rgba(19, 23, 32, 0.98));
-  backdrop-filter: blur(18px);
-  box-shadow: 0 -16px 32px rgba(0, 0, 0, 0.2);
+  position: static;
+  z-index: auto;
+  background: var(--pane-chrome);
+  border-top: 1px solid var(--border);
+  box-shadow: none;
 }
 
 .theme-light .agent-composer {
-  background:
-    linear-gradient(180deg, rgba(246, 241, 232, 0.9), rgba(246, 241, 232, 0.98));
+  background: var(--pane-chrome);
 }
 
 .error-banner {
