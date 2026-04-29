@@ -330,6 +330,13 @@ function App() {
       .sort((left, right) => right.createdAt - left.createdAt),
     [agentApprovals]
   );
+  const pendingPlanApprovals = useMemo(
+    () =>
+      agentApprovals
+        .filter((approval) => approval.status === "pending" && approval.kind === "plan")
+        .sort((left, right) => right.createdAt - left.createdAt),
+    [agentApprovals]
+  );
   const activeCommandApproval = useMemo(() => {
     for (const approval of pendingCommandApprovals) {
       const target = findApprovalPlanStep(approval);
@@ -382,6 +389,34 @@ function App() {
     [agentApprovals, agentPlans]
   );
   const activeRunnablePlan = resumableAgentPlan ?? runnableAgentPlan;
+  const sortedAgentPlans = useMemo(
+    () =>
+      agentPlans
+        .slice()
+        .sort((left, right) => {
+          const leftApproval = agentApprovals.find((entry) => entry.id === left.approvalId);
+          const rightApproval = agentApprovals.find((entry) => entry.id === right.approvalId);
+          const leftPending = leftApproval?.status === "pending" ? 1 : 0;
+          const rightPending = rightApproval?.status === "pending" ? 1 : 0;
+
+          if (leftPending !== rightPending) {
+            return rightPending - leftPending;
+          }
+
+          return right.createdAt - left.createdAt;
+        }),
+    [agentApprovals, agentPlans]
+  );
+  const pendingPlanCards = useMemo(
+    () =>
+      pendingPlanApprovals
+        .map((approval) => {
+          const plan = sortedAgentPlans.find((entry) => entry.approvalId === approval.id);
+          return plan ? { approval, plan } : null;
+        })
+        .filter((entry): entry is { approval: AgentApproval; plan: AgentPlan } => entry !== null),
+    [pendingPlanApprovals, sortedAgentPlans]
+  );
   const persistedAgentRunOutcome = useMemo(() => {
     if (activeCommandApproval) {
       return "paused" as AgentRunOutcome;
@@ -2261,6 +2296,54 @@ function App() {
                 <strong>{recentAgentCommits.length}</strong>
               </article>
             </section>
+            {pendingPlanCards.length > 0 ? (
+              <section className="agent-action-queue">
+                <div className="message-meta">
+                  <span>Pending Review</span>
+                  <span>{pendingPlanCards.length}</span>
+                </div>
+                {pendingPlanCards.map(({ approval, plan }) => (
+                  <article className="agent-plan-card agent-plan-card-actionable" key={plan.id}>
+                    <div className="message-meta">
+                      <span>Plan Approval</span>
+                      <span>{new Date(plan.createdAt).toLocaleString()}</span>
+                    </div>
+                    <h3>{plan.title}</h3>
+                    {plan.summary ? <p>{plan.summary}</p> : null}
+                    <ol>
+                      {plan.steps.slice(0, 4).map((step) => (
+                        <li key={step.id} className="agent-plan-step">
+                          <strong>{step.title}</strong>
+                          {step.detail ? <span>{step.detail}</span> : null}
+                        </li>
+                      ))}
+                    </ol>
+                    {plan.steps.length > 4 ? (
+                      <span className="agent-event-detail">
+                        {plan.steps.length - 4} more step(s) in this plan.
+                      </span>
+                    ) : null}
+                    <div className="approval-actions">
+                      <button
+                        type="button"
+                        onClick={() => void resolveAgentApproval(approval.id, true)}
+                        disabled={resolvingApprovalIds.includes(approval.id)}
+                      >
+                        Approve plan
+                      </button>
+                      <button
+                        type="button"
+                        className="danger-button"
+                        onClick={() => void resolveAgentApproval(approval.id, false)}
+                        disabled={resolvingApprovalIds.includes(approval.id)}
+                      >
+                        Reject plan
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </section>
+            ) : null}
             {selectedAgentSession?.memorySummary ? (
               <article className="agent-event">
                 <div className="message-meta">
@@ -2279,9 +2362,9 @@ function App() {
                 <pre className="agent-event-payload">{selectedAgentSession.preferredCommands.join("\n")}</pre>
               </article>
             ) : null}
-            {agentPlans.length > 0 ? (
+            {sortedAgentPlans.length > 0 ? (
               <section className="agent-plan-stack">
-                {agentPlans.map((plan) => {
+                {sortedAgentPlans.map((plan) => {
                   const approval = agentApprovals.find((entry) => entry.id === plan.approvalId);
 
                   return (

@@ -128,6 +128,8 @@ button:disabled {
 .app-shell {
   display: flex;
   min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   color: var(--text);
 }
 
@@ -145,6 +147,9 @@ button:disabled {
 
 .pane {
   min-height: 100vh;
+  height: 100vh;
+  min-width: 0;
+  min-height: 0;
   backdrop-filter: blur(22px);
 }
 
@@ -163,6 +168,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   background: var(--center-bg);
+  overflow: hidden;
 }
 
 .splitter {
@@ -771,6 +777,7 @@ button:disabled {
 }
 
 .agent-run-strip,
+.agent-action-queue,
 .agent-commit-list {
   display: flex;
   flex-direction: column;
@@ -789,6 +796,12 @@ button:disabled {
   border-radius: 18px;
   background: var(--card-bg);
   padding: 1rem;
+}
+
+.agent-plan-card-actionable {
+  width: min(96%, 920px);
+  border-color: rgba(123, 223, 246, 0.42);
+  background: rgba(123, 223, 246, 0.08);
 }
 
 .agent-plan-card h3 {
@@ -987,6 +1000,21 @@ button:disabled {
   min-height: 96px;
 }
 
+.agent-composer {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  background:
+    linear-gradient(180deg, rgba(19, 23, 32, 0.86), rgba(19, 23, 32, 0.98));
+  backdrop-filter: blur(18px);
+  box-shadow: 0 -16px 32px rgba(0, 0, 0, 0.2);
+}
+
+.theme-light .agent-composer {
+  background:
+    linear-gradient(180deg, rgba(246, 241, 232, 0.9), rgba(246, 241, 232, 0.98));
+}
+
 .error-banner {
   display: flex;
   justify-content: space-between;
@@ -1050,12 +1078,15 @@ button:disabled {
 @media (max-width: 1080px) {
   .app-shell {
     flex-direction: column;
+    height: auto;
+    overflow: visible;
   }
 
   .pane-left,
   .pane-center,
   .pane-right {
     width: 100% !important;
+    height: auto;
     min-height: auto;
   }
 
@@ -1065,5 +1096,11 @@ button:disabled {
 
   .scrollable {
     max-height: none;
+  }
+
+  .agent-composer {
+    position: static;
+    box-shadow: none;
+    backdrop-filter: none;
   }
 }
