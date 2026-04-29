@@ -1,402 +1,133 @@
-# Sabio Agent Mode - Implementation Plan
+# Sabio Agent Mode - Delivery Summary
 
-This plan upgrades Sabio from a local Ollama chat UI into a local coding agent while preserving Chat Mode. It assumes the Rust/Axum backend is the source of truth for agent execution and that the frontend consumes streamed agent events.
+This document replaces the earlier forward-looking build plan with a summary of what was actually delivered on `feature/agent-mode`.
 
-## Milestone 0 - Branch Setup
+## Status
 
-### Tasks
-- Create the implementation branch:
+Agent Mode is now implemented as a strong local MVP with:
 
-```bash
-git checkout -b feature/agent-mode
-```
+- trusted-workspace gating
+- backend-owned persistent sessions
+- plan generation and approval
+- approved autonomous execution
+- read/write workspace tools
+- autonomous safe commands
+- approval pauses for network/destructive commands
+- per-step commits
+- cancellation
+- retry and no-progress handling
+- session memory and preferred command hints
+- session deletion
+- reload-safe run/session state handling
 
-- Confirm the worktree is clean before starting feature work.
+## Delivered Milestones
 
-### Commit
+### 1. Agent Shell And Workspace Trust
 
-```text
-init: agent mode branch
-```
+Delivered:
 
-## Milestone 1 - Backend Agent Module Skeleton
+- Chat/Agent mode switch
+- workspace validation
+- git status and branch detection
+- trust gate before agent execution
+- git initialization for non-repo folders
 
-### Tasks
-- Split agent code into backend modules under `server/src/agent/`.
-- Add placeholder types for:
-  - sessions
-  - events
-  - workspaces
-  - tools
-  - approvals
-- Add route stubs under `/api/agent`.
-- Keep existing Chat Mode routes unchanged.
+### 2. Persistent Session Model
 
-### Commit
+Delivered:
 
-```text
-feat(agent): add backend agent module skeleton
-```
+- backend-managed session storage
+- session rename
+- session deletion
+- workspace-scoped session list
+- session memory summaries
+- preferred autonomous command memory
 
-## Milestone 2 - Mode Switch UI
+### 3. Agent Event And Status Model
 
-### Tasks
-- Add top-level Chat Mode / Agent Mode toggle.
-- Preserve existing Chat Mode behavior.
-- Create an Agent Mode shell without enabling execution yet.
-- Maintain separate UI state per mode.
+Delivered:
 
-### Commit
+- structured event log persistence
+- event replay endpoint
+- run status endpoint
+- transcript rendering for plans, approvals, commits, errors, and final outcomes
 
-```text
-feat(ui): add chat and agent mode switch
-```
+### 4. Plan And Approval Flow
 
-## Milestone 3 - Workspace Selection And Trust
+Delivered:
 
-### Tasks
-- Implement workspace selector UI:
-  - native folder picker when available
-  - manual path fallback
-- Add backend workspace validation:
-  - canonicalize workspace path
-  - ensure path exists and is a directory
-  - detect git repository state
-  - detect current branch
-  - detect clean/dirty worktree
-- Add one-time workspace trust prompt.
-- Block Agent Mode execution until workspace is trusted.
+- model-generated structured plans
+- starter-plan fallback
+- explicit plan approval before autonomous execution
+- approval queue and inline approval context in the UI
 
-### Commit
+### 5. Rust-Controlled Agent Loop
 
-```text
-feat(agent): add workspace selection and trust
-```
+Delivered:
 
-## Milestone 4 - Hybrid Session Persistence
-
-### Tasks
-- Add backend-managed authoritative session storage.
-- Store:
-  - session metadata
-  - workspace path
-  - branch
-  - agent history
-  - plan history
-  - event log
-  - approvals
-  - memory summary
-  - preferred commands
-- Add frontend storage for UI state:
-  - selected mode
-  - selected session
-  - pane sizes
-  - expanded panels
-  - transient draft
-- Implement default workspace session.
-- Implement named sessions.
-- Implement `\rename <title>`.
-
-### Commit
-
-```text
-feat(agent): add hybrid session persistence
-```
-
-## Milestone 5 - Agent Event Stream
-
-### Tasks
-- Define typed agent event schema.
-- Add SSE endpoint for agent runs.
-- Persist streamed events with size caps.
-- Implement minimum event types:
-  - `session_started`
-  - `assistant_message_delta`
-  - `plan_created`
-  - `approval_requested`
-  - `approval_resolved`
-  - `tool_started`
-  - `tool_output`
-  - `tool_finished`
-  - `patch_created`
-  - `git_commit_created`
-  - `error`
+- read-only workspace inspection
+- patch and write operations
+- autonomous `run_command`
+- approval-required command pause/resume
+- cancellation
+- retries and no-progress aborts
+- structured terminal outcomes:
+  - `completed`
+  - `paused`
+  - `failed`
   - `cancelled`
-  - `session_finished`
-- Add frontend event timeline rendering.
 
-### Commit
+### 6. Git Integration
 
-```text
-feat(agent): stream typed agent events
-```
+Delivered:
 
-## Milestone 6 - Tool Schema And Validation
+- clean-worktree gate before run start
+- per-step commit behavior
+- commit events and recent-commit UI
 
-### Tasks
-- Define structured JSON tool-call schema.
-- Require commands as:
-
-```json
-{
-  "command": "cargo",
-  "args": ["check"],
-  "cwd": "."
-}
-```
-
-- Reject shell strings.
-- Implement tool registry and validation layer.
-- Return structured validation errors to the agent loop.
-
-### Commit
-
-```text
-feat(agent): add tool schema validation
-```
-
-## Milestone 7 - Read-Only Workspace Tools
-
-### Tasks
-- Implement:
-  - `list_files`
-  - `read_file`
-  - `search_text`
-  - `git_status`
-  - `git_diff`
-- Enforce workspace root containment.
-- Prevent symlink path escape.
-- Add basic backend tests for path validation.
-
-### Commit
-
-```text
-feat(agent): add read-only workspace tools
-```
-
-## Milestone 8 - Safe Command Runner
-
-### Tasks
-- Implement direct process spawning.
-- Enforce:
-  - no shell execution
-  - workspace-contained cwd
-  - timeout
-  - stdout/stderr capture
-  - live output streaming
-  - child process cancellation
-- Add command classification:
-  - autonomous
-  - approval-required network
-  - approval-required destructive
-  - blocked
-- Allow autonomous commands after plan approval unless classified otherwise.
-- Require approval for package-manager network commands.
-
-### Commit
-
-```text
-feat(agent): add safe command runner
-```
-
-## Milestone 9 - Approval System
-
-### Tasks
-- Add backend approval state machine.
-- Add approval API for approve/reject.
-- Render approvals:
-  - inline in transcript
-  - in right-side approvals queue
-- Approval-required cases:
-  - network commands
-  - destructive commands
-  - file deletion outside generated temporary directories
-- Persist approval outcomes.
-
-### Commit
-
-```text
-feat(agent): add approval workflow
-```
-
-## Milestone 10 - Plan Generation Flow
-
-### Tasks
-- Implement plan-first agent prompt.
-- Require structured plan output.
-- Render plan in Agent Mode.
-- Require user approval before autonomous execution.
-- Block execution if workspace is untrusted or git worktree is dirty.
-
-### Commit
-
-```text
-feat(agent): add plan approval flow
-```
-
-## Milestone 11 - Rust-Controlled Agent Loop
-
-### Tasks
-- Implement `agent_loop` module.
-- Loop through:
-  - model request
-  - structured tool call parse
-  - validation
-  - tool execution or approval pause
-  - observation return
-  - final summary
-- Add invalid-tool-call recovery.
-- Abort after repeated invalid model output.
-- Preserve existing chat streaming path separately.
-
-### Commit
-
-```text
-feat(agent): implement rust-controlled agent loop
-```
-
-## Milestone 12 - Patch And Write Tools
-
-### Tasks
-- Implement `apply_patch`.
-- Implement bounded `write_file` for creation/replacement cases.
-- Prefer patch-first modification.
-- Auto-apply patches after plan approval.
-- Require explicit approval for deleting user/workspace files.
-- Allow autonomous deletion only inside generated temporary directories.
-- Stream and persist patch/diff events.
-
-### Commit
-
-```text
-feat(agent): add patch and write tools
-```
-
-## Milestone 13 - Git Commit Integration
-
-### Tasks
-- Use current branch.
-- Require clean worktree before the agent run starts.
-- Commit after each approved plan step.
-- Use commit format:
+Commit format:
 
 ```text
 sabio(agent): <step description>
 ```
 
-- Surface commit failures in transcript and event log.
-- Include created commits in final summary.
+### 7. UI Polish And Hardening
 
-### Commit
+Delivered:
 
-```text
-feat(agent): commit completed plan steps
-```
+- paused-run banner with blocked plan/step context
+- resume targeting for the blocked plan
+- multiline run-summary formatting
+- stale-session recovery after deletion
+- stale async response guards for session-scoped loads
+- repeated-click guards for agent actions
 
-## Milestone 14 - Retry And No-Progress Detection
+## Current End-To-End Flow
 
-### Tasks
-- Detect recoverable command/tool failures.
-- Allow bounded retries.
-- Detect repeated failures.
-- Detect no-progress loops.
-- Stream retry decisions to event log.
-- Abort with useful diagnostics when stuck.
+The delivered MVP supports:
 
-### Commit
+`task -> plan -> approval -> edit -> command/test -> commit -> summary`
 
-```text
-feat(agent): add retry and no-progress handling
-```
+More specifically:
 
-## Milestone 15 - Cancellation
+1. Trust a clean git workspace.
+2. Create or resume an agent session.
+3. Enter a task and generate a plan.
+4. Approve the plan.
+5. Run the approved plan.
+6. Pause for approval if the agent requests a network/destructive command.
+7. Resume the plan after approval.
+8. Commit step-level changes automatically.
+9. Review the final run summary, commits, and event log.
 
-### Tasks
-- Add cancellation API.
-- Kill active child process on cancel.
-- Stop the agent loop.
-- Stream `cancelled` event.
-- Show partial diff after cancellation.
-- Do not automatically revert changes.
+## Remaining Optional Follow-Ups
 
-### Commit
+The big implementation work is done. Remaining work is optional polish rather than missing architecture.
 
-```text
-feat(agent): add run cancellation
-```
+Reasonable future follow-ups:
 
-## Milestone 16 - Agent Console UI
-
-### Tasks
-- Build Agent Mode layout:
-  - top workspace/status bar
-  - left file explorer
-  - center transcript
-  - right command log and approvals
-  - bottom or overlay diff viewer
-- Display:
-  - trust status
-  - current branch
-  - clean/dirty status
-  - plan
-  - tool calls
-  - command output
-  - patches
-  - commits
-  - final summary
-
-### Commit
-
-```text
-feat(ui): build agent console
-```
-
-## Milestone 17 - Resume And Memory
-
-### Tasks
-- Load sessions by workspace.
-- Add session picker.
-- Restore event history and memory summary.
-- Update memory summary after completed runs.
-- Keep memory separate from authoritative logs.
-
-### Commit
-
-```text
-feat(agent): add session resume and memory
-```
-
-## Milestone 18 - End-To-End MVP
-
-### Tasks
-- Verify the target flow:
-
-```text
-task -> plan -> approval -> patch -> command/test -> commit -> summary
-```
-
-- Ensure Chat Mode still works.
-- Ensure Agent Mode blocks unsafe or untrusted states.
-- Add focused automated checks where practical.
-
-### Commit
-
-```text
-feat(agent): complete end-to-end agent mode
-```
-
-## Milestone 19 - Polish
-
-### Tasks
-- Improve error messages.
-- Improve diagnostics for Ollama/model failures.
-- Improve command classification messages.
-- Review responsive behavior.
-- Confirm logo/header presentation is consistent in both modes.
-- Update README with Agent Mode usage and safety notes.
-
-### Commit
-
-```text
-chore: polish agent mode
-```
+- a tighter release/operator guide
+- richer diff presentation
+- more automated browser-level race testing
+- optional archive/soft-delete behavior for sessions
+- additional command and output inspection polish

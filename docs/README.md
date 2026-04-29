@@ -1,104 +1,68 @@
-# Sabio
+# Sabio Docs
 
 ![Sabio logo](../assets/Sabio_logo.png)
 
-**Version:** V1.2.0
+This folder contains the current product docs plus the original chat-mode planning docs.
 
-Sabio is a local-first Ollama workspace with:
+## Current Docs
 
-- a React three-pane UI
-- a Rust backend proxy
-- IndexedDB session persistence
-- file upload and raw-text extraction
-- Markdown-first assistant responses
-- inline Thinking status while the local engine generates
-- local display preferences for dark/light theme and font scaling
+- [agent_requirements.md](agent_requirements.md)
+  Current source of truth for Sabio Agent Mode behavior and constraints.
 
-## Run
+- [agent_implementation_plan.md](agent_implementation_plan.md)
+  Delivery summary for the completed Agent Mode MVP on `feature/agent-mode`.
 
-1. Install dependencies:
+## Legacy v1 Docs
+
+- [requirements.md](requirements.md)
+  Original requirements for the chat-first Sabio build before Agent Mode.
+
+- [implementation_plan.md](implementation_plan.md)
+  Original build plan for the chat-first Sabio implementation.
+
+## Local Development
+
+### Run
 
 ```bash
 npm ci --include=dev
-```
-
-2. Start the app:
-
-```bash
 npm start
 ```
 
-`npm start` runs the local server on `http://127.0.0.1:3000`. In development it serves the Vite frontend through middleware; after `npm run build` it serves the production bundle from `dist/client`.
+Sabio serves the app at `http://127.0.0.1:3000`.
 
-Starting Sabio also checks whether Ollama is responding at `http://127.0.0.1:11434`. If Ollama is not up, the Rust backend attempts to launch `ollama serve` before starting the Sabio server, then opens the default browser to `http://127.0.0.1:3000`.
+The Rust backend expects Ollama at `http://127.0.0.1:11434`. If Ollama is not already running, Sabio attempts to launch `ollama serve` before starting the local web app.
 
-## Install From A Release Archive
-
-Each tagged GitHub release includes platform-labeled distribution archives:
-
-- `sabio-linux-x64-<version>.tar.gz`
-- `sabio-macos-arm64-<version>.tar.gz`
-- `sabio-windows-x64-<version>.zip`
-
-To install from one of these archives:
-
-1. Download the archive for your operating system from the GitHub release page.
-2. Extract the archive to a local folder.
-3. Install Ollama separately. Sabio expects Ollama at `http://127.0.0.1:11434` by default and will attempt to launch `ollama serve` if it is not already running.
-4. Install at least one Ollama model, for example:
+### Build
 
 ```bash
-ollama pull llama3.2
-```
-
-5. Start Sabio from the extracted folder:
-
-```bash
-./sabio-server
-```
-
-On Windows, run:
-
-```powershell
-.\sabio-server.exe
-```
-
-6. Open the local app in your browser if it does not open automatically:
-
-```text
-http://127.0.0.1:3000
-```
-
-The release archives contain the production frontend build and a platform-specific Rust backend binary. They do not require Node.js for normal use, but they still require a local Ollama installation for model execution.
-
-## Build
-
-```bash
-npm ci --include=dev
 npm run build
 ```
 
-To create a clean runnable distribution folder with the Rust executable and built frontend assets:
+### Package A Runnable Distribution
 
 ```bash
 ./build.sh
 ```
 
-`build.sh` checks for required Node build dependencies such as TypeScript, Vite, and `@types/node`. If they are
-missing, it runs `npm ci --include=dev` before building. Avoid production-only dependency installs such as
-`npm install --omit=dev` when building from source because the TypeScript check requires development type packages.
+## Recommended Local Models
 
-This recreates `dist/` and stages:
+Sabio works best in Agent Mode with models that reliably follow structured JSON. A small local default that has worked well during development is:
 
-- `dist/sabio-server` or `dist/sabio-server.exe`
-- `dist/client/`
-- `dist/assets/`
-- `dist/VERSION`
-- `dist/README.md`
-- `dist/README-RUN.txt`
+```bash
+ollama pull qwen2.5-coder:3b
+```
 
-## Requirements
+## Agent Mode Workflow
 
-- Node.js 20+
-- Rust 1.94+ for source builds
-- A local Ollama instance running on `http://127.0.0.1:11434`
+The intended loop is:
+
+`task -> plan -> approval -> edit -> command/test -> commit -> summary`
+
+Before autonomous execution:
+
+- the workspace must be validated
+- the workspace must be explicitly trusted
+- the workspace must be a clean git repository
+
+If a folder is not already a git repository, Sabio can initialize one from the UI.

@@ -4,6 +4,10 @@ Below is a **clean, structured `requirements.md` document** suitable for consump
 
 # Sabio — Requirements Specification (v1)
 
+> Historical note:
+> This document describes the original chat-first Sabio scope.
+> Current Agent Mode behavior is documented in [agent_requirements.md](agent_requirements.md).
+
 ## 1. Overview
 
 ### 1.1 Purpose

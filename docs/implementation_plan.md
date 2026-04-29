@@ -1,5 +1,9 @@
 # Sabio — Detailed Implementation Plan
 
+> Historical note:
+> This document is the original chat-first implementation plan.
+> The delivered Agent Mode MVP is summarized in [agent_implementation_plan.md](agent_implementation_plan.md).
+
 ## Purpose
 This document is a build-oriented implementation plan for Codex to construct **Sabio**, a local-first web application that provides a React-based chat interface for a locally running Ollama instance via a Node.js backend proxy.
 
