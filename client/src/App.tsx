@@ -683,7 +683,7 @@ function App() {
   }, [selectedAgentSessionId]);
 
   useEffect(() => {
-    if (!selectedAgentSessionId || session.appMode !== "agent") {
+    if (!selectedAgentSessionId || session.appMode !== "agent" || !isAgentRunning) {
       return;
     }
 

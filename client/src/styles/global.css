@@ -213,6 +213,7 @@ button:disabled {
 .scrollable {
   overflow-y: auto;
   max-height: calc(100vh - 150px);
+  scrollbar-gutter: stable;
 }
 
 .brand-panel {
@@ -278,6 +279,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  scrollbar-gutter: stable;
 }
 
 .empty-chat,
@@ -606,6 +608,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  scrollbar-gutter: stable;
 }
 
 .settings-card {
@@ -697,7 +700,8 @@ button:disabled {
 }
 
 .agent-session-strip {
-  width: min(92%, 860px);
+  width: 100%;
+  max-width: 860px;
   display: flex;
   flex-wrap: wrap;
   gap: 0.65rem;
@@ -751,10 +755,12 @@ button:disabled {
 .agent-transcript {
   flex: 1;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .agent-event {
-  width: min(92%, 860px);
+  width: 100%;
+  max-width: 860px;
 }
 
 .agent-paused-banner {
@@ -813,7 +819,8 @@ button:disabled {
 }
 
 .agent-plan-card {
-  width: min(92%, 860px);
+  width: 100%;
+  max-width: 860px;
   border: 1px solid rgba(123, 223, 246, 0.28);
   border-radius: 18px;
   background: var(--card-bg);
@@ -821,7 +828,7 @@ button:disabled {
 }
 
 .agent-plan-card-actionable {
-  width: min(96%, 920px);
+  max-width: 920px;
   border-color: rgba(123, 223, 246, 0.42);
   background: rgba(123, 223, 246, 0.08);
 }
@@ -910,6 +917,7 @@ button:disabled {
 .agent-event-payload {
   max-height: 260px;
   overflow: auto;
+  scrollbar-gutter: stable;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: rgba(0, 0, 0, 0.18);
@@ -1104,11 +1112,12 @@ button:disabled {
 }
 
 .agent-composer {
-  position: static;
-  z-index: auto;
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
   background: var(--pane-chrome);
   border-top: 1px solid var(--border);
-  box-shadow: none;
+  box-shadow: 0 -12px 20px rgba(0, 0, 0, 0.12);
 }
 
 .theme-light .agent-composer {
