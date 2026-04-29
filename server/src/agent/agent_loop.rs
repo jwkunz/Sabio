@@ -253,24 +253,45 @@ pub async fn run_approved_plan(
                         &step.id,
                         AgentPlanStepStatus::Pending,
                     );
+                    let summary =
+                        build_paused_summary(&plan.title, &step.title, &error.1.detail);
+                    let _ = append_session_finished_event(
+                        session_id,
+                        &plan.id,
+                        Some(&step.id),
+                        &summary,
+                        "paused",
+                        &commit_hashes,
+                    );
                     return Ok(RunPlanResponse {
-                        plan: storage::list_plans(session_id)
-                            .map_err(|storage_error| agent_error(StatusCode::BAD_REQUEST, storage_error))?
-                            .into_iter()
-                            .find(|candidate| candidate.id == plan_id)
-                            .ok_or_else(|| agent_error(StatusCode::NOT_FOUND, "Plan not found."))?,
-                        summary: error.1.detail.clone(),
+                        plan: load_plan(session_id, plan_id)?,
+                        summary,
                         outcome: AgentRunOutcome::Paused,
                     });
                 }
                 if is_cancelled_error(&error.1.detail) {
+                    let summary =
+                        build_cancelled_summary(&plan.title, Some(&step.title), &summary_parts);
+                    let _ = append_run_memory(
+                        session_id,
+                        &build_failure_memory_entry(
+                            &plan.title,
+                            Some(&step.title),
+                            "Run cancelled by user.",
+                            "cancelled",
+                        ),
+                    );
+                    let _ = append_session_finished_event(
+                        session_id,
+                        &plan.id,
+                        Some(&step.id),
+                        &summary,
+                        "cancelled",
+                        &commit_hashes,
+                    );
                     return Ok(RunPlanResponse {
-                        plan: storage::list_plans(session_id)
-                            .map_err(|storage_error| agent_error(StatusCode::BAD_REQUEST, storage_error))?
-                            .into_iter()
-                            .find(|candidate| candidate.id == plan_id)
-                            .ok_or_else(|| agent_error(StatusCode::NOT_FOUND, "Plan not found."))?,
-                        summary: error.1.detail.clone(),
+                        plan: load_plan(session_id, plan_id)?,
+                        summary,
                         outcome: AgentRunOutcome::Cancelled,
                     });
                 }
@@ -295,16 +316,15 @@ pub async fn run_approved_plan(
                         AgentPlanStepStatus::Failed,
                     );
                 }
-                let summary = format!("Plan failed at '{}': {}", step.title, error.1.detail);
-                let _ = storage::append_event(
+                let summary =
+                    build_failed_summary(&plan.title, &step.title, &error.1.detail, &summary_parts);
+                let _ = append_session_finished_event(
                     session_id,
-                    AgentEventType::SessionFinished,
-                    json!({
-                        "planId": plan.id,
-                        "summary": summary,
-                        "stepId": step.id,
-                        "outcome": "failed",
-                    }),
+                    &plan.id,
+                    Some(&step.id),
+                    &summary,
+                    "failed",
+                    &commit_hashes,
                 );
 
                 return Ok(RunPlanResponse {
@@ -357,16 +377,19 @@ pub async fn run_approved_plan(
                         "failed",
                     ),
                 );
-                let summary = format!("Plan failed at '{}': Unable to commit completed plan step.", step.title);
-                let _ = storage::append_event(
+                let summary = build_failed_summary(
+                    &plan.title,
+                    &step.title,
+                    "Unable to commit completed plan step.",
+                    &summary_parts,
+                );
+                let _ = append_session_finished_event(
                     session_id,
-                    AgentEventType::SessionFinished,
-                    json!({
-                        "planId": plan.id,
-                        "summary": summary,
-                        "stepId": step.id,
-                        "outcome": "failed",
-                    }),
+                    &plan.id,
+                    Some(&step.id),
+                    &summary,
+                    "failed",
+                    &commit_hashes,
                 );
                 return Ok(RunPlanResponse {
                     plan: load_plan(session_id, plan_id)?,
@@ -413,22 +436,15 @@ pub async fn run_approved_plan(
         .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
     }
 
-    let summary = if summary_parts.is_empty() {
-        "Approved plan run completed.".to_string()
-    } else {
-        summary_parts.join("\n")
-    };
-    let _ = storage::append_event(
+    let summary = build_completed_summary(&plan.title, &summary_parts, &commit_hashes);
+    append_session_finished_event(
         session_id,
-        AgentEventType::SessionFinished,
-        json!({
-            "planId": plan.id,
-            "summary": summary,
-            "commitHashes": commit_hashes,
-            "outcome": "completed",
-        }),
-    )
-    .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?;
+        &plan.id,
+        None,
+        &summary,
+        "completed",
+        &commit_hashes,
+    )?;
     let _ = storage::update_memory_summary(
         session_id,
         &build_memory_entry(&plan.title, &summary, &commit_hashes),
@@ -457,6 +473,29 @@ fn load_plan(
         .into_iter()
         .find(|candidate| candidate.id == plan_id)
         .ok_or_else(|| agent_error(StatusCode::NOT_FOUND, "Plan not found."))
+}
+
+fn append_session_finished_event(
+    session_id: &str,
+    plan_id: &str,
+    step_id: Option<&str>,
+    summary: &str,
+    outcome: &str,
+    commit_hashes: &[String],
+) -> Result<(), (StatusCode, Json<AgentApiError>)> {
+    storage::append_event(
+        session_id,
+        AgentEventType::SessionFinished,
+        json!({
+            "planId": plan_id,
+            "stepId": step_id,
+            "summary": summary,
+            "commitHashes": commit_hashes,
+            "outcome": outcome,
+        }),
+    )
+    .map(|_| ())
+    .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))
 }
 
 async fn request_step_action(
@@ -1149,6 +1188,84 @@ fn append_run_memory(
     storage::update_memory_summary(session_id, entry)
         .map(|_| ())
         .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))
+}
+
+fn build_completed_summary(
+    plan_title: &str,
+    summary_parts: &[String],
+    commit_hashes: &[String],
+) -> String {
+    let mut lines = vec![format!("Completed plan '{}'.", plan_title.trim())];
+
+    if !summary_parts.is_empty() {
+        lines.extend(
+            summary_parts
+                .iter()
+                .take(4)
+                .map(|part| format!("- {}", part.trim())),
+        );
+    }
+
+    if !commit_hashes.is_empty() {
+        lines.push(format!(
+            "Created {} commit(s): {}.",
+            commit_hashes.len(),
+            commit_hashes.join(", ")
+        ));
+    }
+
+    lines.join("\n")
+}
+
+fn build_paused_summary(plan_title: &str, step_title: &str, detail: &str) -> String {
+    format!(
+        "Paused plan '{}' at '{}'.\n{}",
+        plan_title.trim(),
+        step_title.trim(),
+        detail.trim()
+    )
+}
+
+fn build_cancelled_summary(
+    plan_title: &str,
+    step_title: Option<&str>,
+    summary_parts: &[String],
+) -> String {
+    let mut summary = if let Some(step_title) = step_title.map(str::trim).filter(|value| !value.is_empty()) {
+        format!("Cancelled plan '{}' during '{}'.", plan_title.trim(), step_title)
+    } else {
+        format!("Cancelled plan '{}'.", plan_title.trim())
+    };
+
+    if let Some(last_note) = summary_parts.last().map(String::as_str).map(str::trim).filter(|value| !value.is_empty())
+    {
+        summary.push_str("\nLast completed work: ");
+        summary.push_str(last_note);
+    }
+
+    summary
+}
+
+fn build_failed_summary(
+    plan_title: &str,
+    step_title: &str,
+    diagnostic: &str,
+    summary_parts: &[String],
+) -> String {
+    let mut summary = format!(
+        "Failed plan '{}' at '{}'.\n{}",
+        plan_title.trim(),
+        step_title.trim(),
+        diagnostic.trim()
+    );
+
+    if let Some(last_note) = summary_parts.last().map(String::as_str).map(str::trim).filter(|value| !value.is_empty())
+    {
+        summary.push_str("\nLast completed work: ");
+        summary.push_str(last_note);
+    }
+
+    summary
 }
 
 fn remember_successful_command(session_id: &str, action: &ModelStepAction) {
