@@ -287,6 +287,7 @@ pub struct RunPlanResponse {
 pub enum AgentRunOutcome {
     Completed,
     Paused,
+    Failed,
     Cancelled,
 }
 

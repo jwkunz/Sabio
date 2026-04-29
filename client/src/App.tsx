@@ -126,7 +126,7 @@ const findApprovalPlanStep = (approval: AgentApproval) => {
 };
 
 const isPersistedRunOutcome = (value: unknown): value is AgentRunOutcome =>
-  value === "completed" || value === "paused" || value === "cancelled";
+  value === "completed" || value === "paused" || value === "failed" || value === "cancelled";
 
 const hasRemainingPlanSteps = (plan: AgentPlan) => plan.steps.some((step) => step.status !== "completed");
 const isMissingSessionResponse = (response: Response) => response.status === 404;

@@ -295,7 +295,23 @@ pub async fn run_approved_plan(
                         AgentPlanStepStatus::Failed,
                     );
                 }
-                return Err(error);
+                let summary = format!("Plan failed at '{}': {}", step.title, error.1.detail);
+                let _ = storage::append_event(
+                    session_id,
+                    AgentEventType::SessionFinished,
+                    json!({
+                        "planId": plan.id,
+                        "summary": summary,
+                        "stepId": step.id,
+                        "outcome": "failed",
+                    }),
+                );
+
+                return Ok(RunPlanResponse {
+                    plan: load_plan(session_id, plan_id)?,
+                    summary,
+                    outcome: AgentRunOutcome::Failed,
+                });
             }
         };
 
@@ -341,10 +357,22 @@ pub async fn run_approved_plan(
                         "failed",
                     ),
                 );
-                return Err(agent_error(
-                    StatusCode::BAD_REQUEST,
-                    "Unable to commit completed plan step.",
-                ));
+                let summary = format!("Plan failed at '{}': Unable to commit completed plan step.", step.title);
+                let _ = storage::append_event(
+                    session_id,
+                    AgentEventType::SessionFinished,
+                    json!({
+                        "planId": plan.id,
+                        "summary": summary,
+                        "stepId": step.id,
+                        "outcome": "failed",
+                    }),
+                );
+                return Ok(RunPlanResponse {
+                    plan: load_plan(session_id, plan_id)?,
+                    summary,
+                    outcome: AgentRunOutcome::Failed,
+                });
             }
 
             let commit_hash = commit.commit_hash.clone();
@@ -418,6 +446,17 @@ pub async fn run_approved_plan(
         summary,
         outcome: AgentRunOutcome::Completed,
     })
+}
+
+fn load_plan(
+    session_id: &str,
+    plan_id: &str,
+) -> Result<AgentPlan, (StatusCode, Json<AgentApiError>)> {
+    storage::list_plans(session_id)
+        .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))?
+        .into_iter()
+        .find(|candidate| candidate.id == plan_id)
+        .ok_or_else(|| agent_error(StatusCode::NOT_FOUND, "Plan not found."))
 }
 
 async fn request_step_action(
