@@ -130,6 +130,7 @@ const isPersistedRunOutcome = (value: unknown): value is AgentRunOutcome =>
 
 const hasRemainingPlanSteps = (plan: AgentPlan) => plan.steps.some((step) => step.status !== "completed");
 const isMissingSessionResponse = (response: Response) => response.status === 404;
+const hasLineBreak = (value: string) => value.includes("\n");
 
 const summarizeAgentEvent = (event: AgentEvent) => {
   const payload = event.payload ?? {};
@@ -2122,7 +2123,9 @@ function App() {
                 <div className="message-meta">
                   <span>Status</span>
                 </div>
-                <p>{agentSessionStatus}</p>
+                <p className={hasLineBreak(agentSessionStatus) ? "agent-event-summary is-report" : "agent-event-summary"}>
+                  {agentSessionStatus}
+                </p>
               </article>
             ) : null}
             {activeCommandApproval ? (
@@ -2253,8 +2256,14 @@ function App() {
                       <span>{formatAgentEventType(event.type)}</span>
                       <span>{new Date(event.timestamp).toLocaleString()}</span>
                     </div>
-                    <p>{summary.summary}</p>
-                    {summary.detail ? <span className="agent-event-detail">{summary.detail}</span> : null}
+                    <p className={hasLineBreak(summary.summary) ? "agent-event-summary is-report" : "agent-event-summary"}>
+                      {summary.summary}
+                    </p>
+                    {summary.detail ? (
+                      <span className={hasLineBreak(summary.detail) ? "agent-event-detail is-report" : "agent-event-detail"}>
+                        {summary.detail}
+                      </span>
+                    ) : null}
                     <details className="agent-event-raw">
                       <summary>Payload</summary>
                       <pre className="agent-event-payload">{JSON.stringify(event.payload, null, 2)}</pre>

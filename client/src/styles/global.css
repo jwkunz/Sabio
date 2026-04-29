@@ -738,6 +738,22 @@ button:disabled {
   margin: 0;
 }
 
+.agent-event-summary {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.agent-event-summary.is-report,
+.agent-event-detail.is-report {
+  white-space: pre-wrap;
+}
+
+.agent-event-summary.is-report {
+  font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.93rem;
+  line-height: 1.6;
+}
+
 .agent-event-detail {
   display: block;
   margin-top: 0.45rem;
