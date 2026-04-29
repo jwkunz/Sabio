@@ -129,6 +129,7 @@ const isPersistedRunOutcome = (value: unknown): value is AgentRunOutcome =>
   value === "completed" || value === "paused" || value === "cancelled";
 
 const hasRemainingPlanSteps = (plan: AgentPlan) => plan.steps.some((step) => step.status !== "completed");
+const isMissingSessionResponse = (response: Response) => response.status === 404;
 
 const summarizeAgentEvent = (event: AgentEvent) => {
   const payload = event.payload ?? {};
@@ -1080,6 +1081,20 @@ function App() {
     }
   };
 
+  const handleMissingAgentSession = async (sessionId: string) => {
+    if (selectedAgentSessionId !== sessionId) {
+      return;
+    }
+
+    setSelectedAgentSessionId("");
+    setAgentEvents([]);
+    setAgentApprovals([]);
+    setAgentPlans([]);
+    setIsAgentRunning(false);
+    await loadAgentSessions(session.agentWorkspace.canonicalPath);
+    setAgentSessionStatus("This agent session is no longer available. Select another session or create a new one.");
+  };
+
   const loadAgentTools = async () => {
     try {
       const response = await fetch("/api/agent/tools");
@@ -1099,6 +1114,11 @@ function App() {
     try {
       const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/events`);
 
+      if (isMissingSessionResponse(response)) {
+        await handleMissingAgentSession(sessionId);
+        return;
+      }
+
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(payload?.error || "Unable to load agent events.");
@@ -1114,6 +1134,11 @@ function App() {
   const loadAgentApprovals = async (sessionId: string) => {
     try {
       const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/approvals`);
+
+      if (isMissingSessionResponse(response)) {
+        await handleMissingAgentSession(sessionId);
+        return;
+      }
 
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -1131,6 +1156,11 @@ function App() {
     try {
       const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/plans`);
 
+      if (isMissingSessionResponse(response)) {
+        await handleMissingAgentSession(sessionId);
+        return;
+      }
+
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(payload?.error || "Unable to load plans.");
@@ -1146,6 +1176,11 @@ function App() {
   const loadAgentRunStatus = async (sessionId: string) => {
     try {
       const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/run/status`);
+
+      if (isMissingSessionResponse(response)) {
+        await handleMissingAgentSession(sessionId);
+        return;
+      }
 
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -1190,6 +1225,11 @@ function App() {
           ]
         })
       });
+
+      if (isMissingSessionResponse(response)) {
+        await handleMissingAgentSession(selectedAgentSessionId);
+        return;
+      }
 
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -1241,6 +1281,11 @@ function App() {
           })
         }
       );
+
+      if (isMissingSessionResponse(response)) {
+        await handleMissingAgentSession(selectedAgentSessionId);
+        return;
+      }
 
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -1298,6 +1343,11 @@ function App() {
         }
       );
 
+      if (isMissingSessionResponse(response)) {
+        await handleMissingAgentSession(selectedAgentSessionId);
+        return;
+      }
+
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(payload?.error || "Unable to run agent plan.");
@@ -1340,6 +1390,11 @@ function App() {
         | { cancelled?: boolean; message?: string; error?: string }
         | null;
 
+      if (isMissingSessionResponse(response)) {
+        await handleMissingAgentSession(selectedAgentSessionId);
+        return;
+      }
+
       if (!response.ok) {
         throw new Error(payload?.error || "Unable to cancel agent run.");
       }
@@ -1372,6 +1427,11 @@ function App() {
           body: JSON.stringify({ approved })
         }
       );
+
+      if (isMissingSessionResponse(response)) {
+        await handleMissingAgentSession(selectedAgentSessionId);
+        return;
+      }
 
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -1454,6 +1514,11 @@ function App() {
         },
         body: JSON.stringify({ title })
       });
+
+      if (isMissingSessionResponse(response)) {
+        await handleMissingAgentSession(selectedAgentSessionId);
+        return;
+      }
 
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as { error?: string } | null;
