@@ -1070,6 +1070,10 @@ function App() {
       } else {
         setSelectedAgentSessionId("");
         setAgentEvents([]);
+        setAgentApprovals([]);
+        setAgentPlans([]);
+        setAgentSessionStatus("");
+        setIsAgentRunning(false);
       }
     } catch (sessionError) {
       setAgentSessionStatus((sessionError as Error).message || "Unable to load agent sessions.");
@@ -1460,6 +1464,40 @@ function App() {
       setAgentSessionStatus("Session renamed.");
     } catch (renameError) {
       setAgentSessionStatus((renameError as Error).message || "Unable to rename agent session.");
+    }
+  };
+
+  const deleteAgentSession = async () => {
+    if (!selectedAgentSessionId || !selectedAgentSession) {
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `Delete the agent session "${selectedAgentSession.title}"? This removes its saved plans, approvals, memory, and event log.`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/agent/sessions/${encodeURIComponent(selectedAgentSessionId)}`, {
+        method: "DELETE"
+      });
+      const payload = (await response.json().catch(() => null)) as { message?: string; error?: string } | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.error || "Unable to delete agent session.");
+      }
+
+      setAgentEvents([]);
+      setAgentApprovals([]);
+      setAgentPlans([]);
+      setIsAgentRunning(false);
+      await loadAgentSessions(session.agentWorkspace.canonicalPath);
+      setAgentSessionStatus(payload?.message || "Agent session deleted.");
+    } catch (deleteError) {
+      setAgentSessionStatus((deleteError as Error).message || "Unable to delete agent session.");
     }
   };
 
@@ -2418,6 +2456,16 @@ function App() {
                     <br />
                     Updated {new Date(selectedAgentSession.updatedAt).toLocaleString()}
                   </p>
+                  <div className="settings-button-row">
+                    <button
+                      type="button"
+                      className="secondary-button danger-button"
+                      onClick={() => void deleteAgentSession()}
+                      disabled={isAgentRunning}
+                    >
+                      Delete session
+                    </button>
+                  </div>
                 </>
               ) : (
                 <p className="empty-state">Trust a workspace to create a session.</p>

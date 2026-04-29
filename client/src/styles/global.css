@@ -861,6 +861,17 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.danger-button {
+  border-color: rgba(255, 110, 110, 0.45);
+  color: #ffb1b1;
+}
+
+.danger-button:hover,
+.danger-button:focus-visible {
+  border-color: rgba(255, 140, 140, 0.7);
+  background: rgba(255, 110, 110, 0.12);
+}
+
 .agent-tool-list {
   display: flex;
   flex-direction: column;

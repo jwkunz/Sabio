@@ -115,6 +115,16 @@ pub fn rename_session(id: &str, title: String) -> Result<AgentSessionRecord, Str
     Ok(session)
 }
 
+pub fn delete_session(id: &str) -> Result<(), String> {
+    let path = session_path(id)?;
+
+    if !path.exists() {
+        return Err("Session not found.".to_string());
+    }
+
+    fs::remove_file(path).map_err(|error| error.to_string())
+}
+
 pub fn create_approval(
     session_id: &str,
     kind: AgentApprovalKind,

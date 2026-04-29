@@ -307,6 +307,13 @@ pub struct CancelRunResponse {
     pub message: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteSessionResponse {
+    pub deleted: bool,
+    pub message: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecuteWriteToolRequest {

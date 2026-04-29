@@ -30,9 +30,9 @@ use super::types::{
     AgentApiError, AgentApprovalKind, AgentApprovalsResponse, AgentCapability, AgentEventsResponse,
     AgentHealthResponse, AgentPlansResponse, AgentRouteStatus, AgentSessionRecord,
     AgentSessionSummary, AgentWorkspaceStatus, CreatePlanRequest, CreateSessionRequest,
-    ExecuteWriteToolRequest, GeneratePlanRequest, InitializeGitRequest, ListSessionsQuery,
-    RenameSessionRequest, ResolveApprovalRequest, RunPlanRequest, ValidateWorkspaceRequest,
-    ValidateWorkspaceResponse,
+    DeleteSessionResponse, ExecuteWriteToolRequest, GeneratePlanRequest, InitializeGitRequest,
+    ListSessionsQuery, RenameSessionRequest, ResolveApprovalRequest, RunPlanRequest,
+    ValidateWorkspaceRequest, ValidateWorkspaceResponse,
 };
 
 pub fn router() -> Router<AppState> {
@@ -47,7 +47,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/commands/execute", post(execute_command_route))
         .route("/sessions", get(sessions).post(create_session))
-        .route("/sessions/:session_id", get(session))
+        .route("/sessions/:session_id", get(session).delete(delete_session))
         .route("/sessions/:session_id/rename", post(rename_session))
         .route("/sessions/:session_id/events", get(session_events))
         .route(
@@ -226,6 +226,28 @@ async fn rename_session(
     storage::rename_session(&session_id, request.title)
         .map(Json)
         .map_err(|error| agent_error(StatusCode::BAD_REQUEST, error))
+}
+
+async fn delete_session(
+    State(state): State<AppState>,
+    AxumPath(session_id): AxumPath<String>,
+) -> Result<Json<DeleteSessionResponse>, (StatusCode, Json<AgentApiError>)> {
+    let run_status = state.agent_runs.status(&session_id);
+
+    if run_status.running {
+        return Err(agent_error(
+            StatusCode::CONFLICT,
+            "Cancel the active agent run before deleting this session.",
+        ));
+    }
+
+    storage::delete_session(&session_id)
+        .map_err(|error| agent_error(StatusCode::NOT_FOUND, error))?;
+
+    Ok(Json(DeleteSessionResponse {
+        deleted: true,
+        message: "Agent session deleted.".to_string(),
+    }))
 }
 
 async fn session_events(
